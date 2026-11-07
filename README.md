@@ -11,7 +11,7 @@ R code about hemodynamics
 | `4-x`                      | 敏感性/亚组/中介 | 剂量中介分析，时长分层分析，监测方式分层分析，失血量中介分析，年龄亚组分析，时间亚组分析，中心亚组分析，性别亚组分析        |
 | `forest*.R`                | 出图        | 森林图                      |
 
-### 4.1 数据清洗`1-x` 
+###1 数据清洗`1-x` 
 
 ⚠️ 这一段**必须在同一个 R 会话里顺序执行**（后一个脚本依赖前一个留在内存里的 `data1`）
 
@@ -26,7 +26,7 @@ R code about hemodynamics
 | `1-7 data clean - group of susceptible.R`              | 造易感人群亚组                      | `monitor_below65_before_start*.csv`、`Susceptible_Share_*.csv`                       |
 | `1-8 data clean - table1.R`                            | Table 1 基线表 + 排除清单           | `baseline_table1.csv`、`Baseline_Table.docx`、`Check_Baseline_Excluded.csv`       |
 
-### 4.2 描述统计`2-X` 
+###2 描述统计`2-X` 
 
 | 脚本                                           | 干什么                             | 产出                                                           |
 | -------------------------------------------- | ------------------------------- | ------------------------------------------------------------ |
@@ -34,7 +34,7 @@ R code about hemodynamics
 | `2-2 description - create GEE event table.R` | **重建低血压事件表**（事件级 + 手术级），含时间基准自检 | `Final_Analysis_Events.rds`、`Final_Analysis_Surgery.rds` |
 | `2-3 description - table2.R`                 | Table 2 描述性统计                   | `Table2_EpisodeLevel.*`、`Table2_SurgeryLevel.*`              |
 
-### 4.3 主分析`3-X`
+###3 主分析`3-X`
 
 | 脚本                                                | 干什么                                       | 产出                                                                                        |
 | ------------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------- |
