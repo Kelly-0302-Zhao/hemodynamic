@@ -1,10 +1,10 @@
 ## =============================================================================
-## 1-2 data clean - ASA&GENERAL&DURATION.R —— ASA 统一分级、只保留全麻、补齐麻醉起止时间
+## 1-2 data clean - ASA&GENERAL&DURATION.R -- unify ASA grading, keep only general anesthesia, complete anesthesia start and end times
 ## =============================================================================
 
-#规范ASA分级
+#Standardize ASA grading
 ## ============================================================================
-## 第 1 步：把各家医院五花八门的 ASA 写法统一成 Ⅰ/Ⅱ/Ⅲ（识别不出记 NA）
+## Step 1: unify the various ASA notations across hospitals into I/II/III (record NA when unrecognized)
 ## ============================================================================
 data1 <- data1 %>%
   mutate(ASA_GRADE_raw = ASA_GRADE)
@@ -43,37 +43,37 @@ table(data1$ASA_GRADE, useNA = "ifany")
 # Ⅰ     Ⅱ     Ⅲ 
 # 1959 69735 33880 
 ## ============================================================================
-## 第 2 步：只保留"全身麻醉"的手术（剔除非全麻 / 不能确认全麻者， 2682 人）
+## Step 2: keep only "general anesthesia" surgeries (excluding those that are not general anesthesia or cannot be confirmed, 2682 patients)
 ## ============================================================================
 general <- read_csv(
   "D:/Paper/anesthesia/propofol&ciprofol compares/My paper/multicenter/General Anesthesia.csv",
   locale = locale(encoding = "GBK")) %>% 
-  distinct() #导入临床协助整理的全麻列表
-# 1. 预处理字典表（确保文字不含空格，以免影响匹配）
+  distinct() #Import the general anesthesia list compiled with clinical assistance
+# 1. Preprocess the dictionary table (make sure the text contains no spaces, so that matching is not affected)
 general <- general %>%
   mutate(ANESTHESIA_METHOD = trimws(as.character(ANESTHESIA_METHOD))) %>%
   distinct()
-# 2. 对合并后的 data1 进行筛选（筛选了2682名非全麻或不能确认全麻的患者，剩余102892个患者）
+# 2. Filter the merged data1 (2682 patients who were not general anesthesia or could not be confirmed were excluded, leaving 102892 patients)
 data1 <- data1 %>%
-  # 关联全麻字典
+  # Join the general anesthesia dictionary
   left_join(general, by = "ANESTHESIA_METHOD") %>%
   filter(
     GENERAL == 1 | 
       grepl("全麻|全身麻醉|静吸复合|插管|喉罩", ANESTHESIA_METHOD)) %>%
-  # 移除辅助列
+  # Remove helper columns
   select(-GENERAL)
 
 ## ============================================================================
-## 第 3 步：补齐麻醉开始/结束时间（缺失时用入室/出室时间兜底），为算时长做准备
+## Step 3: complete anesthesia start/end times (fall back to room-in/room-out times when missing) in preparation for computing duration
 ## ============================================================================
-#计算手术时长
-data1 <- data1 %>% #手术时长清洗缺失值，这里定义的手术时长是按照麻醉时间来定义的
-  mutate( # 补充麻醉开始时间
+#Compute the surgery duration
+data1 <- data1 %>% #Clean missing values in surgery duration; surgery duration is defined here by anesthesia time
+  mutate( # Fill in anesthesia start times
     ANES_START_TIME = coalesce(
       ANES_START_TIME,
       START_DATE_TIME,
       IN_DATE_TIME
-    ),#补充麻醉结束时间
+    ),#Fill in anesthesia end times
     ANES_END_TIME = coalesce(
       ANES_END_TIME,
       END_DATE_TIME,

@@ -1,5 +1,5 @@
 ## =============================================================================
-## 2-1 description - lab data clean.R —— 读三家检验 lab 表、标化合并、写出，并跑数据质量摘要
+## 2-1 description - lab data clean.R - read the lab tables from the three hospitals, standardize and merge them, write them out, and run a data quality summary
 ## =============================================================================
 demographics <- data1
 operation <- event
@@ -9,51 +9,51 @@ lab2 <- read_csv("D:/Paper/anesthesia/propofol&ciprofol compares/My paper/multic
                  locale = locale(encoding = "UTF-8")) # 9683536obs
 lab3 <- read_csv("D:/Paper/anesthesia/propofol&ciprofol compares/My paper/multicenter/zhongda/lab.csv", 
                  locale = locale(encoding = "UTF-8")) # 4575869obs
-vital <- monitor1 # 72460818obs（同一分钟多条记录不去重）
+vital <- monitor1 # 72460818obs (multiple records within the same minute are not deduplicated)
 setDT(vital)
 
-# 定义统一时区
+# Define a unified time zone
 MY_TZ <- "Asia/Shanghai"
 
 standardize_lab_data <- function(df, hospital_name) {
-  message("正在标准化 Lab 数据: ", hospital_name)
-  # 转为 data.table 原地处理
+  message("Standardizing Lab data: ", hospital_name)
+  # Convert to data.table for in-place processing
   setDT(df)
-  # 统一列名大写，防止合并冲突
+  # Uppercase column names to avoid merge conflicts
   setnames(df, toupper(names(df)))
-  # 强制主键和 ID 为字符型
+  # Coerce the primary key and ID columns to character
   id_cols <- intersect(c("PATIENT_ID", "VISIT_ID", "OPER_ID", "INP_NO"), names(df))
   df[, (id_cols) := lapply(.SD, function(x) trimws(as.character(x))), .SDcols = id_cols]
-  # 统一时间格式与时区
+  # Standardize the time format and time zone
   if ("TIME_POINT" %in% names(df)) {
     df[, TIME_POINT := with_tz(as.POSIXct(TIME_POINT), tzone = MY_TZ)]  }
-  # 3. 统一结果和项目名称
+  # 3. Standardize the result and item names
   df[, `:=`(
     REPORT_ITEM_NAME = as.character(REPORT_ITEM_NAME),
     RESULT = as.character(RESULT),
     UNITS = as.character(UNITS),
     Hospital = hospital_name  )]
-  # 4. 只选择核心列，丢弃杂质列
+  # 4. Keep only the core columns and drop the extraneous ones
   keep_cols <- c("PATIENT_ID", "VISIT_ID", "OPER_ID", "Hospital", 
                  "TIME_POINT", "REPORT_ITEM_NAME", "RESULT", "UNITS")
-  # 仅保留存在的列
+  # Keep only the columns that exist
   res <- df[, .SD, .SDcols = intersect(keep_cols, names(df))]
   return(res)}
-# 清理 lab
+# Clean the lab data
 lab1_clean <- standardize_lab_data(lab1, "NanYi")
 rm(lab1); gc()
 lab2_clean <- standardize_lab_data(lab2, "AnYi")
 rm(lab2); gc()
 lab3_clean <- standardize_lab_data(lab3, "ZhongDa")
 rm(lab3); gc()
-## 合并三家 lab 表，写出 clean 大表（约 1775 万行），随后释放中间变量
+## Merge the lab tables from the three hospitals, write out the clean master table (about 17.75 million rows), then release the intermediate variables
 labs <- bind_rows(lab1_clean, lab2_clean, lab3_clean)
-#输出
+#Output
 fwrite(labs, "lab_clean_17748711obs.csv")
 gc()
 rm(lab1_clean,lab2_clean,lab3_clean)
 
-## 对一张表算"行数 / 唯一首列数 / 唯一前三列组合 / 各列有效数与缺失率"
+## Compute "row count / number of unique values in the first column / number of unique combinations of the first three columns / valid count and missing rate for each column" for one table
 get_summary <- function(df) {
   data <- get(df, envir = .GlobalEnv)
   unique.1 <- length(unique(data[[1]]))
@@ -70,7 +70,7 @@ get_summary <- function(df) {
     unique_first_three_cols = unique.2,
     column_summary = column_summary)
   return(result)}
-## 对四张核心表（人口学 / 术中事件 / 检验 / 监测）跑数据质量摘要
+## Run a data quality summary on the four core tables (demographics / intraoperative events / lab / monitoring)
 s1 <- get_summary("demographics")
 s2 <- get_summary("operation")
 s3 <- get_summary("labs")

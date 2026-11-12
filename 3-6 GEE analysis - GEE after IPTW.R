@@ -1,12 +1,12 @@
 ## =============================================================================
-## 3-6 GEE analysis - — 加权后的四个主模型（论文主结果）
+## 3-6 GEE analysis -  the four main weighted models (main results of the paper)
 ## =============================================================================
 ## ============================================================================
-## 第 1 步：准备工作
+## Step 1: preparation
 ## ============================================================================
 suppressPackageStartupMessages({
-  library(data.table)   # 读表、处理表
-  library(geepack)      # 跑 GEE 模型
+  library(data.table)   # read and process tables
+  library(geepack)      # run GEE models
 })
 
 LEVEL_EN <- c("女" = "Female", "男" = "Male",
@@ -18,108 +18,108 @@ lvl_en <- function(x) {
   out
 }
 
-## 根目录。所有输入输出都挂在这个目录下面
+## Root directory. All inputs and outputs are placed under this directory
 D    <- "D:/Paper/anesthesia/propofol&ciprofol compares/My paper/multicenter/20260827"
-DATA <- file.path(D, "JCA_run")      # 清洗好的中间表放在这里（1-x 系列脚本的输出）
-OUT  <- file.path(D, "投稿材料", "JCA", "投稿包_20261009", "10-11", "out")  # 所有结果文件都存到这里
+DATA <- file.path(D, "JCA_run")      # The cleaned intermediate tables are placed here (output of the 1-x series of scripts)
+OUT  <- file.path(D, "投稿材料", "JCA", "投稿包_20261009", "10-11", "out")  # All result files are saved here
 dir.create(OUT, showWarnings = FALSE, recursive = TRUE)
 setwd(file.path(D, "投稿材料", "JCA", "投稿包_20261009", "10-11"))
 
-## 三个 ID 列。
+## Three ID columns.
 ID_VARS <- c("PATIENT_ID", "VISIT_ID", "OPER_ID")
 
-## GEE 模型里调整的 4 个基线变量
+## 4 baseline variables adjusted for in the GEE model
 ADJ_VARS <- c("Hypertension", "AGE", "SEX", "ASA_GRADE")
 
-## 时间戳统一按 UTC 解析
+## Parse all timestamps as UTC
 MY_TZ <- "UTC"
 
 ## ============================================================================
-## 第 2 步：读入三张表，拼出"加权分析人群"，报告纳入了多少例次、多少病人
+## Step 2: read the three tables, assemble the "weighted analysis population" and report how many procedures and patients were included
 ## ============================================================================
 
-## 手术表：一行 = 一次手术
+## Surgery table: one row = one procedure
 d <- setDT(readRDS(file.path(OUT, "Final_Analysis_Long_Table.rds")))
 
-## 权重表：3-5 算好的倾向评分（ps_hat）和稳定化加权权重（sw）
+## Weight table: the propensity score (ps_hat) and stabilized weight (sw) computed in 3-5
 w <- setDT(readRDS(file.path(OUT, "IPTW_Weights.rds")))
 
-## 事件表：一行 = 一次低血压事件
+## Episode table: one row = one hypotensive episode
 epi <- setDT(readRDS(file.path(OUT, "Final_Analysis_Events.rds")))
 
-## 三张表的 ID 列统一转成文字型（类型不一致时合并会错位，这是踩过的坑）
+## Convert the ID columns of all three tables to character (merging misaligns when the types differ - a pitfall already hit)
 for (v in ID_VARS) {
   set(d,   j = v, value = as.character(d[[v]]))
   set(w,   j = v, value = as.character(w[[v]]))
   set(epi, j = v, value = as.character(epi[[v]]))
 }
 
-## 把权重挂到手术表上；再删掉"是否长期低血压"信息缺失的手术
+## Attach the weights to the procedure table; then drop procedures with missing "prolonged hypotension" data
 dw <- d[w[, .(PATIENT_ID, VISIT_ID, OPER_ID, ps_hat, sw, in_overlap)],
         on = ID_VARS, nomatch = 0]
 dw <- dw[!is.na(prolonged)]
 
-cat("加权分析人群：手术", nrow(dw), "例次 | 患者", uniqueN(dw$PATIENT_ID), "人\n")
-cat(sprintf("  （手术表全表 %d 例次；差额是倾向评分协变量缺失的手术）\n\n",
+cat("Weighted analysis population:", nrow(dw), "procedures |", uniqueN(dw$PATIENT_ID), "patients\n")
+cat(sprintf("  (total %d procedures in the surgery table; the difference is procedures with missing propensity score covariates)\n\n",
             d[!is.na(prolonged), .N]))
 
 
 ## ============================================================================
-## 第 3 步：模型 M1 —— 每次低血压事件，持续超过 10 分钟的比例，两组比较
-##   数据：事件表（一行 = 一次低血压事件），每个事件继承它所属手术的权重
-##   模型：logistic 型 GEE，报告 OR（环泊酚 vs 丙泊酚）
+## Step 3: model M1 - proportion of hypotension episodes lasting longer than 10 minutes, comparison between the two groups
+##   Data: episode table (one row = one hypotensive episode), each episode inherits the weight of its parent procedure
+##   Model: logistic GEE, reporting the OR (ciprofol vs propofol)
 ## ============================================================================
 
-## 把手术表的分组、权重、调整变量挂到每个事件上 → ep：一行 = 一次事件
+## Attach the group, weight and adjustment variables of the procedure table to each episode -> ep: one row = one episode
 ep <- epi[dw[, .(PATIENT_ID, VISIT_ID, OPER_ID, Group,
                  Hypertension, AGE, SEX, ASA_GRADE, w = sw)],
           on = ID_VARS, nomatch = NULL]
 ep <- ep[!is.na(Group) & is.finite(w) & w > 0]
 
-## GEE 要求"聚类编号"必须是整数，这里把手术编号（患者+就诊+手术）转成整数编号
+## GEE requires the cluster id to be an integer; convert the surgery id (patient + visit + surgery) into an integer id here
 ep[, sid_int := as.integer(factor(paste(PATIENT_ID, VISIT_ID, OPER_ID)))]
 
-## 因变量：这次事件持续超过 10 分钟记 1，否则记 0
+## Outcome: 1 if this episode lasted longer than 10 minutes, 0 otherwise
 ep[, long_epi := as.integer(duration > 10)]
 
-## 删掉公式里用到但取值缺失的事件
+## Drop events with missing values for variables used in the formula
 d1 <- ep[complete.cases(ep[, .(long_epi, Group, Hypertension, AGE, SEX, ASA_GRADE, w)])]
 
-## 跑模型
+## Run the model
 m1 <- geeglm(long_epi ~ Group + Hypertension + AGE + SEX + ASA_GRADE,
              data = d1, id = sid_int, weights = d1$w,
              family = binomial(), corstr = "exchangeable")
 
-## 从模型里取出"环泊酚 vs 丙泊酚"那个系数（对照 = 丙泊酚）
+## Extract the "ciprofol vs propofol" coefficient from the model (control = propofol)
 s1 <- summary(m1)$coefficients
-est1 <- s1["GroupCiprofol_only", "Estimate"]   # 对数尺度系数
-se1  <- s1["GroupCiprofol_only", "Std.err"]    # 标准误
-p1   <- 2 * pnorm(-abs(est1 / se1))            # P 值
+est1 <- s1["GroupCiprofol_only", "Estimate"]   # log-scale coefficient
+se1  <- s1["GroupCiprofol_only", "Std.err"]    # standard error
+p1   <- 2 * pnorm(-abs(est1 / se1))            # P value
 
-## OR 和置信区间 = 系数取指数
+## OR and confidence interval = exponentiated coefficient
 result_main <- data.table(
   analysis  = "IPTW-weighted (full cohort)",
   model     = "M1 Proportion of prolonged hypotensive episodes (>10 min) per episode",
   unit      = "Episode (one hypotensive episode)",
-  n_unit    = nrow(d1),                       # 多少次事件
-  n_patient = uniqueN(d1$PATIENT_ID),         # 涉及多少病人
+  n_unit    = nrow(d1),                       # how many episodes
+  n_patient = uniqueN(d1$PATIENT_ID),         # how many patients are involved
   estimate  = exp(est1), lo = exp(est1 - 1.96 * se1), hi = exp(est1 + 1.96 * se1),
   p         = p1,
   effect_type = "OR",
   effect    = sprintf("%.2f (%.2f-%.2f)", exp(est1), exp(est1 - 1.96 * se1), exp(est1 + 1.96 * se1)))
 
-cat("M1 每次事件 >10 min 的比例  OR =", result_main$effect,
+cat("M1 proportion of episodes >10 min  OR =", result_main$effect,
     "  P =", sprintf("%.3g", p1), "\n")
-cat("   （", nrow(d1), "次事件，涉及", uniqueN(d1$PATIENT_ID), "位病人）\n")
+cat("   （", nrow(d1), "episodes, involving", uniqueN(d1$PATIENT_ID), "patients)\n")
 
 
 ## ============================================================================
-## 第 4 步：模型 M2 —— 每次低血压事件的严重程度总分（AUC），两组比较
-##   AUC = 这次事件的"深度 × 时长"总面积，衡量这一次事件整体有多重
-##   因为 AUC 偏态严重，先取对数再比较；结果换算回"百分比变化"
+## Step 4: model M2 - severity score (AUC) of each hypotension episode, comparison between the two groups
+##   AUC = total area of "depth x duration" for this episode, measuring the overall severity of this episode
+##   Because the AUC is strongly skewed, take the log before comparison; results are converted back to "percentage change"
 ## ============================================================================
 
-ep[, log_eauc := log(event_auc + 0.1)]   # +0.1 是为了避开 log(0)
+ep[, log_eauc := log(event_auc + 0.1)]   # +0.1 avoids log(0)
 d2 <- ep[complete.cases(ep[, .(log_eauc, Group, Hypertension, AGE, SEX, ASA_GRADE, w)])]
 
 m2 <- geeglm(log_eauc ~ Group + Hypertension + AGE + SEX + ASA_GRADE,
@@ -131,7 +131,7 @@ est2 <- s2["GroupCiprofol_only", "Estimate"]
 se2  <- s2["GroupCiprofol_only", "Std.err"]
 p2   <- 2 * pnorm(-abs(est2 / se2))
 
-## 对数系数换算成百分比变化：100 * (exp(系数) - 1)
+## Convert the log coefficient to a percentage change: 100 * (exp(coefficient) - 1)
 result_main <- rbind(result_main, data.table(
   analysis  = "IPTW-weighted (full cohort)",
   model     = "M2 Per-episode hypotension burden (AUC)",
@@ -147,13 +147,13 @@ result_main <- rbind(result_main, data.table(
                       100 * (exp(est2 - 1.96 * se2) - 1),
                       100 * (exp(est2 + 1.96 * se2) - 1))))
 
-cat("M2 每次事件 AUC 变化      ", result_main[model %like% "M2", effect],
+cat("M2 per-episode AUC change              ", result_main[model %like% "M2", effect],
     "  P =", sprintf("%.3g", p2), "\n")
 
 
 ## ============================================================================
-## 第 5 步：模型 M3 —— 每次低血压事件持续几分钟，两组比较
-##   做法和 M2 一样，只是把因变量换成事件时长
+## Step 5: model M3 - duration of each hypotension episode in minutes, comparison between the two groups
+##   Same approach as M2, only with episode duration as the dependent variable
 ## ============================================================================
 
 ep[, log_duration := log(duration + 0.1)]
@@ -183,15 +183,15 @@ result_main <- rbind(result_main, data.table(
                       100 * (exp(est3 - 1.96 * se3) - 1),
                       100 * (exp(est3 + 1.96 * se3) - 1))))
 
-cat("M3 每次事件时长变化       ", result_main[model %like% "M3", effect],
+cat("M3 per-episode duration change         ", result_main[model %like% "M3", effect],
     "  P =", sprintf("%.3g", p3), "\n")
 
 
 ## ============================================================================
-## 第 6 步：模型 M4 —— 每台手术发生几次低血压事件，两组比较
-##   数据：手术表（一行 = 一次手术），因变量 = n_epi（这台手术的事件次数）
-##   手术有长有短，时间长自然容易攒更多次，所以加 offset(log 麻醉时长)，
-##   模型实际比较的是"每小时发生几次"——即事件次数的"率"
+## Step 6: model M4 - number of hypotension episodes per procedure, comparison between the two groups
+##   Data: procedure table (one row = one surgery), dependent variable = n_epi (number of episodes in this surgery)
+##   Surgeries differ in length and longer ones naturally accumulate more episodes, so add offset(log anesthesia duration),
+##   What the model actually compares is "how many per hour", i.e. the "rate" of episode counts
 ## ============================================================================
 adj_ok <- ADJ_VARS[vapply(ADJ_VARS, function(v) {
   vv <- dw[[v]]
@@ -200,7 +200,7 @@ adj_ok <- ADJ_VARS[vapply(ADJ_VARS, function(v) {
 }, logical(1))]
 
 dw[, sid_int := as.integer(factor(paste(PATIENT_ID, VISIT_ID, OPER_ID)))]
-dw[, lg_dur  := log(anes_duration_mins)]   # 麻醉时长取对数，做 offset
+dw[, lg_dur  := log(anes_duration_mins)]   # Log-transform anesthesia duration and use it as an offset
 
 d4 <- dw[complete.cases(dw[, c("n_epi", "Group", adj_ok, "lg_dur", "sw"), with = FALSE])]
 
@@ -223,17 +223,17 @@ result_main <- rbind(result_main, data.table(
   effect_type = "RR",
   effect    = sprintf("%.2f (%.2f-%.2f)", exp(est4), exp(est4 - 1.96 * se4), exp(est4 + 1.96 * se4))))
 
-cat("M4 事件次数率（每小时）   RR =", result_main[model %like% "M4", effect],
+cat("M4 episode rate (per hour)         RR =", result_main[model %like% "M4", effect],
     "  P =", sprintf("%.3g", p4), "\n")
 
 ## ============================================================================
-## 第 7 步：把四个模型的结果存盘（csv + Word 各一份）
-##   预期结果：out\Analysis_Results_main.csv / .docx
+## Step 7: save the results of the four models (one csv + one Word file each)
+##   Expected output: out\Analysis_Results_main.csv / .docx
 ## ============================================================================
 
 fwrite(result_main, file.path(OUT, "Analysis_Results_main.csv"))
 
-## 存一份 Word 版
+## Save a Word version
 tryCatch({
   suppressPackageStartupMessages({ library(flextable); library(officer) })
   ft1 <- flextable(as.data.frame(result_main[, .(
@@ -246,30 +246,30 @@ tryCatch({
          "M4: one surgical procedure per row; all clustered by surgical procedure)"))
   doc <- read_docx() |> body_add_flextable(ft1)
   print(doc, target = file.path(OUT, "Analysis_Results_main.docx"))
-}, error = function(e) cat("[Word 输出失败，CSV 已保存]", conditionMessage(e), "\n"))
+}, error = function(e) cat("[Word output failed, CSV saved]", conditionMessage(e), "\n"))
 
-cat("\n==================== 主结果（IPTW 加权后）====================\n")
+cat("\n==================== Main results (after IPTW weighting)====================\n")
 print(result_main[, .(model, unit, n_unit, n_patient, type = effect_type,
                       effect, p = ifelse(p < 0.001, "<0.001", sprintf("%.3f", p)))])
 
 ## ============================================================================
-## 第 8 步：对照分析 —— 只在"两组特征有重叠"的范围内，重新加权、重做四个模型
-##   安一院从没用过环泊酚，它的丙泊酚病人在"倾向评分"上和环泊酚病人差得太远，落在两组特征不重叠的区域
+## Step 8: control analysis - restricted to the range where the two groups' characteristics overlap, re-weight and redo the four models
+##   AnYi hospital has never used ciprofol; its propofol patients are too far from the ciprofol patients on the "propensity score" and fall in the region where the two groups' characteristics do not overlap
 ## ============================================================================
 
 if (dw[in_overlap == FALSE, .N] > 0) {
 
-  cat("\n==================== 对照：仅 PS 重叠区（重新 IPTW）====================\n")
-  cat(sprintf("剔除不重叠 %d 例次（占 %.1f%%），其中安一院 %d 例次\n",
+  cat("\n==================== Control analysis: PS overlap region only (re-weighted with IPTW)====================\n")
+  cat(sprintf("Excluded %d non-overlapping procedures (%.1f%%), of which %d were at AnYi hospital\n",
               dw[in_overlap == FALSE, .N], 100 * mean(!dw$in_overlap),
               dw[in_overlap == FALSE & Hospital == "AnYi", .N]))
   dw2 <- dw[in_overlap == TRUE]
   print(dw2[, .N, by = .(Hospital, Group)][order(Hospital, Group)])
 
-  ## ---- 8a. 在重叠区内重新拟合倾向评分、重新算权重----
+  ## ---- 8a. refit the propensity score and recompute the weights within the overlap region----
   dw2[, treat := as.integer(Group == "Ciprofol_only")]
 
-  ## 倾向评分用的 10 个基线变量
+  ## 10 baseline variables used for the propensity score
   PS_VARS <- c("AGE", "SEX", "BMI", "ASA_GRADE", "EMERGENCY_INDICATOR",
                "operation_type", "Hypertension", "Diabetes",
                "Coronary_artery_disease", "Heart_failure")
@@ -288,17 +288,17 @@ if (dw[in_overlap == FALSE, .N] > 0) {
   dw2 <- dw2[complete.cases(dw2[, ..use])]
   dw2[, ps_hat := predict(ps_fit, type = "response")]
 
-  ## 稳定化权重：处理组 = 发生率/PS，对照组 = (1-发生率)/(1-PS)
+  ## Stabilized weights: treatment group = treatment rate/PS, control group = (1-treatment rate)/(1-PS)
   prev <- mean(dw2$treat)
   dw2[, sw_raw := ifelse(treat == 1, prev / ps_hat, (1 - prev) / (1 - ps_hat))]
 
-  ## 权重截断：在每组内部按 1% 和 99% 分位切掉极端权重
+  ## Weight truncation: within each group, cut extreme weights at the 1% and 99% quantiles
   dw2[, ql := as.numeric(quantile(sw_raw, 0.01)), by = Group]
   dw2[, qh := as.numeric(quantile(sw_raw, 0.99)), by = Group]
   dw2[, sw := as.numeric(pmin(pmax(sw_raw, ql), qh))]
   dw2[, c("ql", "qh") := NULL]
 
-  ## 加权前后协变量平衡（SMD = 组间均值差 / 合并标准差，<0.1 算平衡）
+  ## Covariate balance before and after weighting (SMD = between-group mean difference / pooled SD; <0.1 counts as balanced)
   wsmd <- function(v, tr, w) {
     v <- as.numeric(v)
     m1_ <- weighted.mean(v[tr == 1], w[tr == 1]); m0_ <- weighted.mean(v[tr == 0], w[tr == 0])
@@ -327,11 +327,11 @@ if (dw[in_overlap == FALSE, .N] > 0) {
   }
   balance_overlap <- rbindlist(bal_rows)
   fwrite(balance_overlap, file.path(OUT, "Table1_IPTW_overlap_Balance_SMD.csv"))
-  cat(sprintf("加权前最大 SMD %.3f → 加权后最大 SMD %.3f\n",
+  cat(sprintf("Max SMD before weighting %.3f → max SMD after weighting %.3f\n",
               max(balance_overlap$smd_before, na.rm = TRUE),
               max(balance_overlap$smd_after, na.rm = TRUE)))
 
-  ## ---- 8b. 重叠区内重跑四个模型
+  ## ---- 8b. rerun the four models within the overlap region
   ep2 <- epi[dw2[, .(PATIENT_ID, VISIT_ID, OPER_ID, Group,
                      Hypertension, AGE, SEX, ASA_GRADE, w = sw)],
              on = ID_VARS, nomatch = NULL]
@@ -388,7 +388,7 @@ if (dw[in_overlap == FALSE, .N] > 0) {
                      100 * (exp(e3) - 1), 100 * (exp(e3 - 1.96 * s3o) - 1), 100 * (exp(e3 + 1.96 * s3o) - 1))))
 
   ## M4
-  ## 在重叠区人群里重新检查一遍：4 个调整变量是否仍然人人有变化
+  ## Recheck in the overlap-region population: whether the 4 adjustment variables still vary across individuals
   adj_ok2 <- ADJ_VARS[vapply(ADJ_VARS, function(v) {
     vv <- dw2[[v]]
     if (is.numeric(vv)) is.finite(sd(vv, na.rm = TRUE)) && sd(vv, na.rm = TRUE) > 0
@@ -425,19 +425,19 @@ if (dw[in_overlap == FALSE, .N] > 0) {
            set_caption(caption = "Covariate balance before and after IPTW within the overlap region only.")
     print(read_docx() |> body_add_flextable(ft2),
           target = file.path(OUT, "Table1_IPTW_overlap_Balance_SMD.docx"))
-  }, error = function(e) cat("[Word 输出失败，CSV 已保存]", conditionMessage(e), "\n"))
+  }, error = function(e) cat("[Word output failed, CSV saved]", conditionMessage(e), "\n"))
 }
 
 ## ============================================================================
-## 第 9 步：两组各自的加权发生率，以及发生率差（绝对效应量）
-##   每个结局算三样 —— 环泊酚加权发生率、丙泊酚加权发生率、两者的差
-##   差的 95% 置信区间用 bootstrap 算：随机有放回地抽"病人"（不是手术）2000 次
+## Step 9: weighted incidence in each group and the incidence difference (absolute effect size)
+##   Three quantities per outcome - weighted ciprofol incidence, weighted propofol incidence, and their difference
+##   The 95% CI of the difference is computed by bootstrap: resample "patients" (not surgeries) randomly with replacement 2000 times
 ## ============================================================================
 
-cat("\n==================== 绝对效应量（加权风险 + bootstrap）====================\n")
+cat("\n==================== Absolute effect estimates (weighted risks + bootstrap)====================\n")
 ocs <- c("prolonged", "prolonged_cum", "multi_epi", "short_only", "any_hypo")
 
-## 事件表也挂上权重，用来算"每次事件 >10 min"的发生比例（和 M1 同口径）
+## Weights are also attached to the episode table to compute the proportion of episodes >10 min (same specification as M1)
 epw_abs <- epi[dw[, .(PATIENT_ID, VISIT_ID, OPER_ID, Group, sw)],
                on = ID_VARS, nomatch = 0]
 epw_abs[, long_epi := as.integer(duration > 10)]
@@ -451,16 +451,16 @@ boot_rd <- function(x, oc, wvar, B = 2000, seed = 20260928) {
   isc <- as.integer(x$Group == "Ciprofol_only")
   sid <- as.integer(factor(paste(x$PATIENT_ID, x$VISIT_ID, x$OPER_ID))); np <- max(sid)
 
-  ## 先把每台手术的总权重和加权结局求和（一次手术就是分析单位）
+  ## First sum the total weight and the weighted outcome within each surgery (one surgery is the analysis unit)
   per <- data.table(sid, isc, w, y)[, .(W = sum(w), Y = sum(w * y)), by = .(sid, isc)]
   CW <- numeric(np); CY <- numeric(np); PW <- numeric(np); PY <- numeric(np)
   CW[per$sid[per$isc == 1]] <- per$W[per$isc == 1]; CY[per$sid[per$isc == 1]] <- per$Y[per$isc == 1]
   PW[per$sid[per$isc == 0]] <- per$W[per$isc == 0]; PY[per$sid[per$isc == 0]] <- per$Y[per$isc == 0]
 
-  ## 真实样本里的发生率差
+  ## Incidence difference in the observed sample
   est <- sum(CY) / sum(CW) - sum(PY) / sum(PW)
 
-  ## bootstrap：重抽病人 2000 次，每次重算发生率差
+  ## bootstrap: resample patients 2000 times, recomputing the incidence difference each time
   set.seed(seed)
   reps <- numeric(B)
   for (b in seq_len(B)) {
@@ -472,7 +472,7 @@ boot_rd <- function(x, oc, wvar, B = 2000, seed = 20260928) {
   c(est = est, lo = as.numeric(quantile(reps, .025)), hi = as.numeric(quantile(reps, .975)))
 }
 
-## 手术级结局（一行 = 一次手术）
+## Procedure-level outcome (one row = one surgery)
 abs_rows <- list()
 for (oc in ocs) {
   a  <- boot_rd(dw, oc, wvar = "sw")
@@ -487,7 +487,7 @@ for (oc in ocs) {
 }
 abs_tab <- rbindlist(abs_rows)
 
-## 事件级结局：每次事件 >10 min 的比例（分母 = 已发生的低血压事件，和手术级的发生率不是一回事，不能放一起比大小）
+## Episode-level outcome: proportion of episodes >10 min (denominator = hypotensive episodes that occurred; this is not the same as the procedure-level incidence, and the two cannot be compared directly)
 cw2 <- epw_abs$Group == "Ciprofol_only"; pw2 <- epw_abs$Group == "Propofol_only"
 a_e <- boot_rd(epw_abs, "long_epi", wvar = "sw")
 abs_epi <- data.table(
@@ -497,7 +497,7 @@ abs_epi <- data.table(
   Risk_difference      = sprintf("%+.1f pp", 100 * a_e["est"]),
   Risk_difference_95CI = sprintf("(%.1f to %.1f)", 100 * a_e["lo"], 100 * a_e["hi"]),
   Ciprofol_n = sum(cw2), Propofol_n = sum(pw2))
-abs_tab <- rbind(abs_epi, abs_tab)   # 事件级那一行放最上面
+abs_tab <- rbind(abs_epi, abs_tab)   # Put the episode-level row on top
 
 print(abs_tab)
 fwrite(abs_tab, file.path(OUT, "Analysis_Results_absolute_main.csv"))
@@ -510,15 +510,15 @@ tryCatch({
           "Cluster bootstrap by surgical procedure."))
   print(read_docx() |> body_add_flextable(ft),
         target = file.path(OUT, "Analysis_Results_absolute_main.docx"))
-}, error = function(e) cat("[Word 输出失败，CSV 已保存]", conditionMessage(e), "\n"))
+}, error = function(e) cat("[Word output failed, CSV saved]", conditionMessage(e), "\n"))
 
 
 ## ============================================================================
-## 第 10 步：同第 9 步，但只在重叠区内做一遍
+## Step 10: same as Step 9, but done only within the overlap region
 ## ============================================================================
 
 if (exists("dw2") && !is.null(dw2$sw)) {
-  cat("\n==================== 绝对效应量（仅 PS 重叠区）====================\n")
+  cat("\n==================== Absolute effect estimates (PS overlap region only)====================\n")
   abs_rows_b <- list()
   for (oc in ocs) {
     a  <- boot_rd(dw2, oc, wvar = "sw")
@@ -558,33 +558,33 @@ if (exists("dw2") && !is.null(dw2$sw)) {
             "remaining rows are surgical-procedure level. Cluster bootstrap by surgical procedure."))
     print(read_docx() |> body_add_flextable(ft),
           target = file.path(OUT, "Analysis_Results_absolute_overlap.docx"))
-  }, error = function(e) cat("[Word 输出失败，CSV 已保存]", conditionMessage(e), "\n"))
+  }, error = function(e) cat("[Word output failed, CSV saved]", conditionMessage(e), "\n"))
 }
 
 
 ## ============================================================================
-## 第 11 步：E-value —— 需要多强的"未知混杂因素"才能把我们的结论推翻
-##   越大说明结论越稳。算法是纯算术，两行就够
+## Step 11: E-value - how strong an "unmeasured confounder" would be needed to overturn our conclusion
+##   The larger the value, the more robust the conclusion. The algorithm is pure arithmetic, two lines are enough
 ## ============================================================================
 
-cat("\n==================== E-value（对 M1 主结局）====================\n")
-## E-value 的计算公式：v + sqrt(v * (v - 1))；v<1 时先取倒数
+cat("\n==================== E-value (for the M1 primary outcome)====================\n")
+## E-value formula: v + sqrt(v * (v - 1)); if v<1, take the reciprocal first
 evalue_of <- function(v) { if (v < 1) v <- 1 / v; v + sqrt(v * (v - 1)) }
 
 m1_row <- result_main[model %like% "M1"]
-or_pt <- m1_row$estimate                        # OR 点估计
-or_ci <- if (or_pt < 1) m1_row$hi else m1_row$lo  # 置信区间里最接近 1 的那一端
+or_pt <- m1_row$estimate                        # OR point estimate
+or_ci <- if (or_pt < 1) m1_row$hi else m1_row$lo  # The end of the confidence interval closest to 1
 
-cat(sprintf("  M1 点估计: OR = %.2f → RR ≈ %.3f → E-value = %.2f\n",
+cat(sprintf("  M1 point estimate: OR = %.2f → RR ≈ %.3f → E-value = %.2f\n",
             or_pt, sqrt(or_pt), evalue_of(sqrt(or_pt))))
-cat(sprintf("  M1 CI 端  : OR = %.2f → RR ≈ %.3f → E-value = %.2f\n",
+cat(sprintf("  M1 CI limit      : OR = %.2f → RR ≈ %.3f → E-value = %.2f\n",
             or_ci, sqrt(or_ci), evalue_of(sqrt(or_ci))))
-cat(sprintf("  （若按 OR≈RR 的宽松口径，两个 E-value 分别为 %.2f / %.2f）\n",
+cat(sprintf("  (under the loose assumption of OR≈RR, the two E-values are %.2f / %.2f)\n",
             evalue_of(or_pt), evalue_of(or_ci)))
 
 
 ## ============================================================================
-## 第 12 步：把主结果表和绝对风险表合成一份 Word
+## Step 12: combine the main results table and the absolute risk table into one Word document
 ## ============================================================================
 
 tryCatch({
@@ -602,5 +602,5 @@ tryCatch({
          "Table 6. Weighted absolute risks and risk differences (cluster bootstrap by surgical procedure)"))
   doc <- read_docx() |> body_add_flextable(ft1) |> body_add_par("") |> body_add_flextable(ft2)
   print(doc, target = file.path(OUT, "Analysis_Results_main.docx"))
-}, error = function(e) cat("[Word 输出失败，CSV 已保存]", conditionMessage(e), "\n"))
+}, error = function(e) cat("[Word output failed, CSV saved]", conditionMessage(e), "\n"))
 

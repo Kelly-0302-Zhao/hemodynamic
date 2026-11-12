@@ -1,5 +1,5 @@
 ## =============================================================================
-## 1-1 data clean - operation type.R —— 三家医院基础表：统一格式、填补科室、合并、筛单药、打手术类型
+## 1-1 data clean - operation type.R -- baseline tables for the three hospitals: unify formats, fill in departments, merge, keep single-drug patients, assign surgery type
 ## =============================================================================
 
 # Packages
@@ -30,51 +30,51 @@ library(purrr)
 library(survey)
 library(Hmisc)
 library(openxlsx)
-setwd("D:/Paper/anesthesia/propofol&ciprofol compares/My paper/multicenter/20260827/JCA_run") #设置存储位置
+setwd("D:/Paper/anesthesia/propofol&ciprofol compares/My paper/multicenter/20260827/JCA_run") #Set the storage location
 #===============================================================================
-#数据清洗，基线描述
+#Data cleaning, baseline description
 #===============================================================================
 data1 <- read_csv("D:/Paper/anesthesia/propofol&ciprofol compares/My paper/multicenter/nanyi/master.csv", 
-                  locale = locale(encoding = "GBK")) # 24649obs 南京市第一医院患者基础数据
+                  locale = locale(encoding = "GBK")) # 24649obs baseline patient data from Nanjing First Hospital
 data2 <- read_csv("D:/Paper/anesthesia/propofol&ciprofol compares/My paper/multicenter/anyi/master.csv", 
-                  locale = locale(encoding = "GBK")) # 50572obs 安徽附一患者基础数据
+                  locale = locale(encoding = "GBK")) # 50572obs baseline patient data from AnYi hospital
 data3 <- read_csv("D:/Paper/anesthesia/propofol&ciprofol compares/My paper/multicenter/zhongda/master.csv", 
-                  locale = locale(encoding = "UTF-8")) # 37452obs 中大患者基础数据
-#=====首先用dept stayed 填补operating dept 由于部分手术名称无法分辨手术分类，因此用科室填补
-#定义标准化函数：设置一个函数，规定每个变量的格式，用此函数去统一三个医院的数据格式
+                  locale = locale(encoding = "UTF-8")) # 37452obs baseline patient data from ZhongDa hospital
+#=====First fill operating dept with dept stayed; some surgery names cannot identify the surgery category, so departments are used to fill them
+#Define the standardization function: set up a function that specifies the format of each variable and use it to unify the data formats of the three hospitals
 standardize_df <- function(df) {
-  # 显式定义上海时区，避免 8 小时偏差
+  # Explicitly set the Shanghai time zone to avoid an 8-hour offset
   my_tz <- "Asia/Shanghai"
   df %>%
     mutate(
-      # --- ID 变量：增加去空格处理 ---
-      # 有些中心数据 ID 后面可能带不可见空格，导致 merge 失败
+      # --- ID variables: add trimming ---
+      # Some centers have invisible spaces after the ID, which can cause merge failures
       across(c(PATIENT_ID, VISIT_ID, OPER_ID, INP_NO), ~ trimws(as.character(.x))),
-      # --- 科室与分类列 ---
+      # --- Department and classification columns ---
       OPERATING_DEPT = as.character(OPERATING_DEPT),
       DEPT_STAYED    = as.character(DEPT_STAYED),
       ASA_GRADE      = as.character(ASA_GRADE),
       EMERGENCY_INDICATOR = as.numeric(EMERGENCY_INDICATOR),
-      # --- 时间列处理 ---
+      # --- Time column handling ---
       across(
         c(IN_HOSPITAL_TIME, IN_DATE_TIME, ANES_START_TIME, START_DATE_TIME, 
           END_DATE_TIME, ANES_END_TIME, OUT_DATE_TIME, IN_ICU_TIME, 
           OUT_ICU_TIME, OUT_HOSPITAL_TIME),
         ~ {
-          # 先转字符，再尝试多种顺序解析
+          # Convert to character first, then try several parsing orders
           tmp_time <- parse_date_time(as.character(.x), 
                                       orders = c("ymd HMS", "ymd HM", "mdy HMS", "dmy HMS"), 
                                       tz = my_tz)
-          # 如果原本不是 NA 但转完变 NA 了，给出警告
+          # Give a warning if a value that was not NA becomes NA after conversion
           return(tmp_time) } ),
-      # --- 人口学与药物：防止非数值干扰 ---
+      # --- Demographics and drugs: guard against non-numeric values ---
       across(c(AGE, HEIGHT, WEIGHT, BMI, PROPOFOL, CIPROFOL), as.numeric),
-      # --- 字符列：确保 NA 统一 ---
+      # --- Character columns: standardize NA ---
       across(c(DIAG_BEFORE_OPERATION, OPERATION_NAME, ANESTHESIA_METHOD, 
                OPERATION_HISTORY, OPERATION_NAME_OF_HISTORY, 
                RECENTLY_TAKING_MEDICATION, PREOPERATIVE_BLOOD_PRESSURE), as.character) )}
-# 执行转换
-## 三家医院各自跑一遍 standardize_df，统一格式
+# Perform the standardization
+## Run standardize_df once for each of the three hospitals to unify formats
 data1 <- standardize_df(data1)
 data2 <- standardize_df(data2)
 data3 <- standardize_df(data3)
@@ -82,23 +82,23 @@ attr(data1$ANES_START_TIME, "tzone")
 attr(data2$ANES_START_TIME, "tzone")
 attr(data3$ANES_START_TIME, "tzone")
 
-colSums(is.na(data1))#patient 8缺失
-colSums(is.na(data2))#patient 48缺失
+colSums(is.na(data1))#patient 8 missing
+colSums(is.na(data2))#patient 48 missing
 colSums(is.na(data3))
 
-#增加医院标签并剔除关键 key 缺失的行（patientid缺失会导致后续匹配出现error）
+#Add the hospital label and drop rows with missing key fields (a missing patientid causes errors in later matching)
 data1 <- data1 %>% filter(!is.na(PATIENT_ID)) %>% mutate(Hospital = "NanYi") # 24641obs
 data2 <- data2 %>% filter(!is.na(PATIENT_ID)) %>% mutate(Hospital = "AnYi") # 50524obs
 data3 <- data3 %>% filter(!is.na(PATIENT_ID)) %>% mutate(Hospital = "ZhongDa") # 37452obs
 
-#发现dept里有数字，先将数字变成NA
-## 这个函数：把"纯数字"的科室名当成脏数据，清成 NA
+#Numbers are found in dept; convert them to NA first
+## This function treats department names that are purely numeric as dirty data and sets them to NA
 clean_dept <- function(df) {
   df %>%
     mutate(
       OPERATING_DEPT = as.character(OPERATING_DEPT),
       
-      # 纯数字 → NA
+      # Purely numeric -> NA
       OPERATING_DEPT = ifelse(
         grepl("^\\d+$", trimws(OPERATING_DEPT)),
         NA,
@@ -107,13 +107,13 @@ clean_dept <- function(df) {
     )
 }
 
-## 三家医院各自跑一遍 clean_dept（把"纯数字"科室清成 NA）
+## Run clean_dept once for each of the three hospitals (sets purely numeric departments to NA)
 data1 <- clean_dept(data1)
 data2 <- clean_dept(data2)
 data3 <- clean_dept(data3)
 
 ## ============================================================================
-## 第 1 步：用"病人所在科室 DEPT_STAYED"填补缺失的手术科室（OPERATING_DEPT）
+## Step 1: fill missing operating department (OPERATING_DEPT) with the patient's department (DEPT_STAYED)
 ## ============================================================================
 fill_dept <- function(df) {
   df %>%
@@ -124,14 +124,14 @@ fill_dept <- function(df) {
     )
 }
 
-## 三家医院各自跑一遍 fill_dept（用 DEPT_STAYED 填补手术科室）
+## Run fill_dept once for each of the three hospitals (fills operating department with DEPT_STAYED)
 data1 <- fill_dept(data1)
 data2 <- fill_dept(data2)
 data3 <- fill_dept(data3)
 
 
 ## ============================================================================
-## 第 2 步：构建"手术名 → 科室"映射字典（取众数，而不是 distinct）
+## Step 2: build a "surgery name -> department" mapping dictionary (using the mode, not distinct values)
 ## ============================================================================
 mapping_dict <- data1 %>%
   filter(!is.na(OPERATION_NAME) & !is.na(OPERATING_DEPT)) %>%
@@ -143,7 +143,7 @@ mapping_dict <- data1 %>%
 
 
 ## ============================================================================
-## 第 3 步：用"手术名 → 科室"字典做精确匹配，再补一批缺失科室
+## Step 3: apply exact matching with the "surgery name -> department" dictionary, then fill another batch of missing departments
 ## ============================================================================
 safe_fill_dept <- function(target_df, mapping_dict) {
   
@@ -155,12 +155,12 @@ safe_fill_dept <- function(target_df, mapping_dict) {
     select(-OPERATING_DEPT_mapped)
 }
 
-## 用字典精确匹配，给 AnYi / ZhongDa 再补一次科室
+## Apply exact dictionary matching to fill departments again for AnYi / ZhongDa
 data2 <- safe_fill_dept(data2, mapping_dict)
 data3 <- safe_fill_dept(data3, mapping_dict)
 
 ## ============================================================================
-## 第 4 步：字典精确匹配后仍缺失的科室，用模糊匹配（字符相似度，最大距离 1）再补一次
+## Step 4: for departments still missing after exact dictionary matching, fill them again with fuzzy matching (character similarity, maximum distance 1)
 ## ============================================================================
 fuzzy_fill_dept <- function(target_df, mapping_dict) {
   
@@ -181,10 +181,10 @@ fuzzy_fill_dept <- function(target_df, mapping_dict) {
     idx <- amatch(
       to_fix$clean_name,
       mapping_dict$clean_name,
-      maxDist = 1   # 收紧匹配条件
+      maxDist = 1   # Tighten the matching condition
     )
     
-    # 只填充成功匹配的
+    # Fill only the successfully matched values
     to_fix$OPERATING_DEPT <- ifelse(
       is.na(idx),
       NA,
@@ -196,12 +196,12 @@ fuzzy_fill_dept <- function(target_df, mapping_dict) {
     select(-clean_name)
 }
 
-## 仍缺科室的，再用模糊匹配补一次（只填匹配成功的，避免误填）
+## For departments still missing, fill again with fuzzy matching (only successful matches are filled, to avoid wrong fills)
 data2 <- fuzzy_fill_dept(data2, mapping_dict)
 data3 <- fuzzy_fill_dept(data3, mapping_dict)
 
 ## ============================================================================
-## 第 5 步：三家医院合并成一张大表，并统一科室/手术名两列的类型（112617 行）
+## Step 5: merge the three hospitals into one table and unify the types of the department and surgery name columns (112617 rows)
 ## ============================================================================
 data1 <- bind_rows(data1, data2, data3) %>%
   mutate(
@@ -211,7 +211,7 @@ data1 <- bind_rows(data1, data2, data3) %>%
 
 
 ## ============================================================================
-## 第 6 步：只保留"单用环泊酚 / 单用丙泊酚"的患者，并打上 Group 标签（105574 行）
+## Step 6: keep only patients who received ciprofol alone or propofol alone, and assign the Group label (105574 rows)
 ## ============================================================================
 data1 <- data1 %>%
   filter((CIPROFOL == 1 & PROPOFOL == 0) |
@@ -220,36 +220,36 @@ data1 <- data1 %>%
 
 
 ## ============================================================================
-## 第 7 步：按"科室名 + 手术名"给每台手术打上"手术类型"标签（骨科/普外/泌尿…）
+## Step 7: assign each surgery a surgery type label by "department name + surgery name" (orthopedics/general surgery/urology...)
 ## ============================================================================
 data1 <- data1 %>%
   mutate(operation_type = case_when(
     
-    # 骨科
+    # Orthopedics
     str_detect(OPERATING_DEPT, "骨科|关节|脊柱|创伤|手外|运动医学") 
     ~ "Orthopaedics",
     
-    # 普外
+    # General surgery
     str_detect(OPERATING_DEPT, "普外|肝胆|胃肠|肛肠|乳腺|甲状腺|烧伤|整形|肿瘤外科") 
     ~ "General Surgery",
     
-    # 泌尿
+    # Urology
     str_detect(OPERATING_DEPT, "泌尿") 
     ~ "Urology",
     
-    # 心胸
+    # Cardiothoracic surgery
     str_detect(OPERATING_DEPT, "胸外|肺外科|心血管外科") 
     ~ "Thoracic Surgery",
     
-    # 妇产
+    # Obstetrics and gynecology
     str_detect(OPERATING_DEPT, "妇科|产科|爱婴") 
     ~ "Gynecology",
     
-    # 神外
+    # Neurosurgery
     str_detect(OPERATING_DEPT, "神经外科") 
     ~ "Neurosurgery",
     
-    # 二次兜底（用手术名）
+    # Second fallback (using surgery name)
     TRUE ~ case_when(
       str_detect(OPERATION_NAME, "骨折|关节置换|脊柱|椎间盘|韧带") ~ "Orthopaedics",
       str_detect(OPERATION_NAME, "胆囊|胃癌|结肠|直肠|乳腺|甲状腺") ~ "General Surgery",
@@ -263,7 +263,7 @@ data1 <- data1 %>%
 
 
 ## ============================================================================
-## 第 8 步：把手术类型设成"有固定顺序"的因子
+## Step 8: set surgery type as a factor with a fixed level order
 ## ============================================================================
 op_levels <- c(
   "General Surgery", "Gynecology",

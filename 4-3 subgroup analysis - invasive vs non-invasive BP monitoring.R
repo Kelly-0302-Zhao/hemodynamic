@@ -1,10 +1,10 @@
 ## =============================================================================
-## 4-3 亚组分析：有创 vs 无创血压监测（按结局血压实际来源归层）
+## 4-3 Subgroup analysis: invasive vs non-invasive blood pressure monitoring (layered by the actual source of the outcome blood pressure)
 ## -----------------------------------------------------------------------------
-## 分析单位：手术（procedure）。一台手术 = 一个观测 = 一个 cluster（cluster_id）。
-## 分层：手术级唯一归组——每台手术只能进一层，两层互斥且并集 = 全队列。
-##       同一患者的不同手术可以分属两层
-##       不是重复计数，不做任何患者级剔除。
+## Unit of analysis: procedure. One procedure = one observation = one cluster (cluster_id).
+## Stratification: each procedure is assigned to exactly one layer at the procedure level; the two layers are mutually exclusive and their union is the whole cohort.
+##       Different procedures of the same patient may fall into different layers
+##       Not double counting; no patient-level exclusions are applied.
 ## =============================================================================
 
 suppressPackageStartupMessages({ library(data.table); library(geepack) })
@@ -18,12 +18,12 @@ PS_VARS  <- c("AGE", "SEX", "BMI", "ASA_GRADE", "EMERGENCY_INDICATOR", "operatio
               "Hypertension", "Diabetes", "Coronary_artery_disease", "Heart_failure")
 ADJ_VARS <- c("Hypertension", "AGE", "SEX", "ASA_GRADE")
 
-## 主稿基准
+## Main manuscript baseline
 REF <- list(M1 = c(0.51, 0.44, 0.58), M2 = c(-27.4, -30.9, -23.6),
             M3 = c(-27.2, -29.7, -24.5), M4 = c(1.22, 1.14, 1.30))
 
 ## ============================================================================
-## 1. 读入 + 归层
+## 1. Read in + stratify
 ## ============================================================================
 tab <- setDT(readRDS(file.path(OUT, "Final_Analysis_Long_Table.rds")))
 epi <- setDT(readRDS(file.path(OUT, "Final_Analysis_Events.rds")))
@@ -35,23 +35,23 @@ for (v in ID_VARS) {
   set(lay, j = v, value = as.character(lay[[v]]))
 }
 
-## 统一簇标识：cluster_id = "PATIENT-VISIT-OPER"（与归层文件同格式）
+## Unified cluster identifier: cluster_id = "PATIENT-VISIT-OPER" (same format as the stratification file)
 tab[, cluster_id := paste(PATIENT_ID, VISIT_ID, OPER_ID, sep = "-")]
 if (!"cluster_id" %in% names(lay)) lay[, cluster_id := paste(PATIENT_ID, VISIT_ID, OPER_ID, sep = "-")]
 lay[, cluster_id := as.character(cluster_id)]
 
-stopifnot("手术级表 cluster_id 不唯一" = uniqueN(tab$cluster_id) == nrow(tab),
-          "归层文件 cluster_id 不唯一" = uniqueN(lay$cluster_id) == nrow(lay))
+stopifnot("cluster_id is not unique in the surgery-level table" = uniqueN(tab$cluster_id) == nrow(tab),
+          "cluster_id is not unique in the layer-assignment file" = uniqueN(lay$cluster_id) == nrow(lay))
 
 tab <- merge(tab, unique(lay[, .SD, .SDcols = c("cluster_id", "layer_label", "layer_final",
                                                 "sbp_src", "adjud_evid", "adjud_verdict",
                                                 "n_cvp_rows")]),
              by = "cluster_id", all.x = TRUE)
 
-stopifnot("归层合并后行数与手术数不符（归层文件有重复）" = nrow(tab) == 85397,
-          "每台手术的 cluster_id 不唯一" = uniqueN(tab$cluster_id) == nrow(tab))
+stopifnot("Row count after merging the layer assignment does not match the number of procedures (the layer file has duplicates)" = nrow(tab) == 85397,
+          "cluster_id is not unique per procedure" = uniqueN(tab$cluster_id) == nrow(tab))
 
-## ---- 规则链重建----
+## ---- Rule chain reconstruction----
 lay_keys <- lay[, .SD, .SDcols = c(ID_VARS, "sbp_src", "adjud_evid", "adjud_verdict", "layer_final")]
 rule_layer <- function(sbp_src, evid, verdict) {
   fifelse(sbp_src == "arterial", "invasive",
@@ -66,38 +66,38 @@ rule_layer <- function(sbp_src, evid, verdict) {
 }
 chk <- lay_keys[, .(layer_rule = rule_layer(sbp_src, adjud_evid, adjud_verdict),
                     layer_final)]
-stopifnot("规则链与固化归层不一致" = all(chk$layer_rule == chk$layer_final),
-          "归层存在缺失" = !any(is.na(tab$layer_final)),
-          "归层存在非法值" = all(tab$layer_final %in% c("invasive", "non_invasive")),
-          "两层台数之和 ≠ 全队列（存在重叠或遗漏）" =
+stopifnot("Rule chain is inconsistent with the frozen layer assignment" = all(chk$layer_rule == chk$layer_final),
+          "Layer assignment contains missing values" = !any(is.na(tab$layer_final)),
+          "Layer assignment contains illegal values" = all(tab$layer_final %in% c("invasive", "non_invasive")),
+          "Sum of the two layers != full cohort (overlap or omission present)" =
             sum(tab$layer_final == "invasive") + sum(tab$layer_final == "non_invasive") == nrow(tab))
 
 tab[, invasive := as.integer(layer_final == "invasive")]
-stopifnot("同一台手术被归入两层" =
+stopifnot("The same procedure was assigned to both layers" =
             tab[, uniqueN(layer_final), by = cluster_id][, max(V1)] == 1L)
 
-## 聚类 id = cluster_id 的整数编码（geeglm 的 id 需整数）
+## Integer encoding of cluster id = cluster_id (geeglm requires an integer id)
 tab[, sid_int := as.integer(factor(cluster_id))]
-stopifnot("cluster_id 与 sid_int 非一一对应" =
+stopifnot("cluster_id and sid_int are not one-to-one" =
             uniqueN(tab$cluster_id) == uniqueN(tab$sid_int) && nrow(tab) == uniqueN(tab$sid_int))
 
-cat(sprintf("归层完成：%d 台 = 有创 %d + 无创 %d（零遗漏、零重叠）\n",
+cat(sprintf("Layer assignment complete: %d procedures = invasive %d + non-invasive %d (no omission, no overlap)\n",
             nrow(tab), sum(tab$invasive == 1), sum(tab$invasive == 0)))
-cat(sprintf("分析单位 = 手术：%d 台 / %d 名患者；每台手术一个簇（cluster_id 唯一，无一脚踏两层）\n",
+cat(sprintf("Unit of analysis = procedure: %d procedures / %d patients; one cluster per procedure (cluster_id unique, no procedure in two layers)\n",
             nrow(tab), uniqueN(tab$PATIENT_ID)))
-cat("\n=== 归层证据分布===\n")
+cat("\n=== Distribution of layer-assignment evidence ===\n")
 ev <- tab[, .N, by = .(sbp_src, adjud_evid, layer_final)][order(sbp_src, -N)]
 print(ev)
 fwrite(ev, file.path(OUT, "Subgroup_BPSourceMatched_LayerAssignment.csv"))
-cat(sprintf("\nCVP>0 的手术：%d 台（有创 %d / 无创 %d；无创者结局值匹配袖带压，按结局来源归层）\n",
+cat(sprintf("\nProcedures with CVP>0: %d (invasive %d / non-invasive %d; for non-invasive ones the outcome values match cuff pressure, so they are layered by outcome source)\n",
             sum(tab$n_cvp_rows > 0, na.rm = TRUE),
             sum(tab$n_cvp_rows > 0 & tab$invasive == 1, na.rm = TRUE),
             sum(tab$n_cvp_rows > 0 & tab$invasive == 0, na.rm = TRUE)))
-cat(sprintf("标签口径 vs 结局口径不一致（双监测、结局实际取袖带压）：%d 台\n",
+cat(sprintf("Labelling criterion vs outcome criterion disagree (dual monitoring, outcome actually taken from cuff pressure): %d procedures\n",
             sum(tab$layer_label == "invasive" & tab$layer_final == "non_invasive")))
 
 ## ============================================================================
-## 2. 描述表
+## 2. Descriptive table
 ## ============================================================================
 tab[, rate_map := n_map / anes_duration_mins]
 desc <- tab[, .(n_surg = .N, n_patient = uniqueN(PATIENT_ID),
@@ -107,7 +107,7 @@ desc <- tab[, .(n_surg = .N, n_patient = uniqueN(PATIENT_ID),
                 prolonged_pct = round(100 * mean(prolonged, na.rm = TRUE), 2),
                 n_epi_mean  = round(mean(n_epi, na.rm = TRUE), 3)),
             by = .(layer_final, Group)]
-cat("\n=== 描述：归层 × 组别 ===\n"); print(desc)
+cat("\n=== Description: layer x group ===\n"); print(desc)
 
 epi_dens <- merge(epi[, .SD, .SDcols = c(ID_VARS, "n_point", "duration", "event_auc")],
                   tab[, .SD, .SDcols = c(ID_VARS, "layer_final", "Group")],
@@ -116,20 +116,20 @@ dens <- epi_dens[, .(n_event = .N,
                      n_point_med = as.numeric(median(n_point, na.rm = TRUE)),
                      dur_med = as.numeric(median(duration, na.rm = TRUE))),
                  by = .(layer_final, Group)]
-cat("\n=== 描述：事件级测压点数 ===\n"); print(dens)
+cat("\n=== Description: number of pressure measurements per episode ===\n"); print(dens)
 
 fwrite(rbind(cbind(level = "surgery", desc), cbind(level = "event", dens), fill = TRUE),
        file.path(OUT, "Subgroup_BPSourceMatched_Descriptive.csv"))
 
 ## ============================================================================
-## 3. 人群分析引擎：一个 -> 四模型全套（IPTW 组内重拟合 + 加权 GEE）
+## 3. Population analysis engine: one -> full set of four models (IPTW refit within group + weighted GEE)
 ## ============================================================================
 run_population <- function(surg, epi_all, lab) {
 
   x <- copy(surg)
   x[, treat := as.integer(Group == "Ciprofol_only")]
 
-  ## 剔除本人群内恒定的 PS 变量
+  ## Drop PS variables that are constant within this population
   use <- character(0)
   for (v in PS_VARS) {
     if (!v %in% names(x)) next
@@ -140,14 +140,14 @@ run_population <- function(surg, epi_all, lab) {
 
   xp <- x[complete.cases(x[, .SD, .SDcols = use])]
   if (nrow(xp) < 100 || min(table(xp$treat)) < 10)
-    stop(sprintf("[%s] 例数不足，无法拟合 PS", lab))
+    stop(sprintf("[%s] too few cases to fit the propensity score", lab))
   xp <- droplevels(xp)
 
   ps_fit <- glm(as.formula(paste("treat ~", paste(use, collapse = " + "))),
                 data = xp, family = binomial())
   xp[, ps_hat := predict(ps_fit, type = "response")]
 
-  ## 稳定化权重 + 组内 1%/99% 截断
+  ## Stabilized weights + 1%/99% truncation within group
   prev <- mean(xp$treat)
   xp[, sw_raw := ifelse(treat == 1, prev / ps_hat, (1 - prev) / (1 - ps_hat))]
   xp[, `:=`(ql = as.numeric(quantile(sw_raw, 0.01)),
@@ -155,7 +155,7 @@ run_population <- function(surg, epi_all, lab) {
   xp[, sw := as.numeric(pmin(pmax(sw_raw, ql), qh))]
   xp[, c("ql", "qh") := NULL]
 
-  ## 平衡性 SMD
+  ## Covariate balance SMD
   wsmd <- function(v, w) {
     v <- as.numeric(v)
     m1 <- weighted.mean(v[xp$treat == 1], w[xp$treat == 1])
@@ -200,18 +200,18 @@ run_population <- function(surg, epi_all, lab) {
   ADJ <- if (length(adj_ok)) paste(adj_ok, collapse = " + ") else "1"
 
   xw <- xp
-  cat(sprintf("   [%s] %d 台；SMD %.3f -> %.3f；ESS 环 %.0f / 丙 %.0f\n",
+  cat(sprintf("   [%s] %d procedures; SMD %.3f -> %.3f; ESS ciprofol %.0f / propofol %.0f\n",
               lab, nrow(xw), max(balance$smd_before, na.rm = TRUE),
               max(balance$smd_after,  na.rm = TRUE),
               ess_tab[Group == "Ciprofol_only", ESS], ess_tab[Group == "Propofol_only", ESS]))
 
-  ## 事件表圈人 + 挂权重（sid_int 由手术级表继承：一台手术 = 一个簇）
+  ## Select procedures in the episode table + attach weights (sid_int inherited from the procedure-level table: one procedure = one cluster)
   xw_small <- xw[, .SD, .SDcols = c(ID_VARS, "sid_int", "Group", adj_ok, "sw")]
   setnames(xw_small, "sw", "w")
   ep <- epi_all[xw[, .SD, .SDcols = ID_VARS], on = ID_VARS, nomatch = NULL]
   ep <- ep[xw_small, on = ID_VARS, nomatch = NULL]
   ep <- ep[!is.na(Group) & is.finite(w) & w > 0]
-  stopifnot("事件级簇数 ≠ 手术数" =
+  stopifnot("Number of episode-level clusters != number of procedures" =
               uniqueN(ep$sid_int) == uniqueN(ep[, paste(PATIENT_ID, VISIT_ID, OPER_ID)]))
   ep[, long_epi := as.integer(duration > 10)]
 
@@ -221,7 +221,7 @@ run_population <- function(surg, epi_all, lab) {
     estimate = numeric(), lo = numeric(), hi = numeric(),
     p = numeric(), effect_type = character(), effect = character())
 
-  ## M1：每次事件 >10min 比例（OR）
+  ## M1: proportion of episodes lasting >10 min (OR)
   d1 <- ep[complete.cases(ep[, c("long_epi", "Group", adj_ok, "sid_int"), with = FALSE])]
   if (nrow(d1) > 50 && uniqueN(d1$Group) > 1) {
     m1 <- geeglm(as.formula(paste("long_epi ~ Group +", ADJ)), data = d1,
@@ -237,7 +237,7 @@ run_population <- function(surg, epi_all, lab) {
       effect = sprintf("%.2f (%.2f-%.2f)", or(e), or(e - 1.96 * s), or(e + 1.96 * s))))
   }
 
-  ## M2 / M3：每次事件 AUC、时长（% 差）
+  ## M2 / M3: episode AUC, duration (% difference)
   for (mm in list(list("log_eauc", "event_auc", "M2 Per-episode hypotension burden (AUC)"),
                   list("log_dur", "duration",   "M3 Duration of each hypotensive episode"))) {
     vn <- mm[[1]]; raw <- mm[[2]]
@@ -258,7 +258,7 @@ run_population <- function(surg, epi_all, lab) {
     }
   }
 
-  ## M4：每台事件次数率（RR，offset log 时长；簇 = 手术）
+  ## M4: episode count rate per procedure (RR, offset log duration; cluster = procedure)
   xw[, lg_dur := log(anes_duration_mins)]
   d4 <- xw[complete.cases(xw[, c("n_epi", "Group", adj_ok, "lg_dur", "sid_int"), with = FALSE])]
   if (nrow(d4) > 50 && uniqueN(d4$Group) > 1) {
@@ -290,9 +290,9 @@ run_population <- function(surg, epi_all, lab) {
 }
 
 ## ============================================================================
-## 4. 基线复现（整体队列，必须复现主稿 M1-M4）
+## 4. Baseline replication (whole cohort, must reproduce the main manuscript M1-M4)
 ## ============================================================================
-cat("\n==================== 基线复现：整体队列 ====================\n")
+cat("\n==================== Baseline reproduction: full cohort ====================\n")
 run_overall <- run_population(tab, epi, "overall")
 
 got <- run_overall$result
@@ -315,15 +315,15 @@ chk <- data.table(
   ref = ref_v)
 chk[, ok := abs(got - ref) <= 0.051]
 print(chk)
-if (!all(chk$ok)) stop("基线未能复现主稿数字，停止。")
-cat("基线复现通过。\n")
+if (!all(chk$ok)) stop("Baseline did not reproduce the manuscript numbers - stopping.")
+cat("Baseline reproduction passed.\n")
 
 ## ============================================================================
-## 5. 有创 / 无创亚组（各自组内重拟合 IPTW）
+## 5. Invasive / non-invasive subgroups (IPTW refit within each group)
 ## ============================================================================
-cat("\n==================== 有创亚组 ====================\n")
+cat("\n==================== Invasive subgroup ====================\n")
 run_inv <- run_population(tab[invasive == 1], epi, "invasive")
-cat("\n==================== 无创亚组 ====================\n")
+cat("\n==================== Non-invasive subgroup ====================\n")
 run_non <- run_population(tab[invasive == 0], epi, "non_invasive")
 
 result_all <- rbind(run_overall$result, run_inv$result, run_non$result, fill = TRUE)
@@ -333,11 +333,11 @@ bal_all    <- rbind(run_overall$balance, run_inv$balance, run_non$balance, fill 
 ess_all    <- rbind(run_overall$ess,    run_inv$ess,    run_non$ess,    fill = TRUE)
 
 ## ============================================================================
-## 6. 交互检验（整体队列权重，加 Group x invasive）
+## 6. Interaction test (whole-cohort weights, add Group x invasive)
 ## ============================================================================
-cat("\n==================== 交互检验 ====================\n")
+cat("\n==================== Interaction test ====================\n")
 xw <- run_overall$xw[!is.na(invasive)]
-## invasive 已在 tab 上按结局口径赋值，随 run_overall 继承
+## invasive has already been assigned on tab by outcome specification and is inherited through run_overall
 ADJ <- if (length(run_overall$adj_ok)) paste(run_overall$adj_ok, collapse = " + ") else "1"
 xw_small <- xw[, .SD, .SDcols = c(ID_VARS, "sid_int", "Group", run_overall$adj_ok, "invasive", "sw")]
 setnames(xw_small, "sw", "w")
@@ -373,16 +373,16 @@ interaction[, ratio := exp(coef_log)]
 print(interaction)
 
 ## ============================================================================
-## 7. 患者级跨层：仅描述，不做任何剔除（分析单位 = 手术）
+## 7. Patient-level across-layer summary: descriptive only, no exclusions (unit of analysis = procedure)
 ## ============================================================================
 pl <- tab[, .(has_inv = any(invasive == 1), has_non = any(invasive == 0)), by = PATIENT_ID]
 cross_pat <- pl[has_inv & has_non]$PATIENT_ID
-cat(sprintf("患者级跨层（仅描述，不剔除）：%d 人 / %d 台 = %.2f%%\n",
+cat(sprintf("Patient-level cross-layer (descriptive only, not excluded): %d patients / %d procedures = %.2f%%\n",
             length(cross_pat), sum(tab$PATIENT_ID %in% cross_pat),
             100 * mean(tab$PATIENT_ID %in% cross_pat)))
 
 ## ============================================================================
-## 8. 保存输出
+## 8. Save output
 ## ============================================================================
 fwrite(result_all,    file.path(OUT, "Subgroup_BPSourceMatched_Results.csv"))
 fwrite(crude_all,     file.path(OUT, "Subgroup_BPSourceMatched_Crude.csv"))
@@ -407,7 +407,7 @@ tryCatch({
       "M1-M3: episode-level; M4: procedure-level with offset of log anesthesia duration."))
   print(read_docx() |> body_add_flextable(ft),
         target = file.path(OUT, "Subgroup_BPSourceMatched_Results.docx"))
-}, error = function(e) cat("[Word 输出失败，CSV 已保存]", conditionMessage(e), "\n"))
+}, error = function(e) cat("[Word output failed, CSV saved]", conditionMessage(e), "\n"))
 
 tryCatch({
   suppressPackageStartupMessages({ library(flextable); library(officer) })
@@ -424,9 +424,9 @@ tryCatch({
       "therefore carries those confounders as well. Subgroup-specific estimates are the primary readout."))
   print(read_docx() |> body_add_flextable(ft2),
         target = file.path(OUT, "Subgroup_BPSourceMatched_Interaction.docx"))
-}, error = function(e) cat("[Word 输出失败，CSV 已保存]", conditionMessage(e), "\n"))
+}, error = function(e) cat("[Word output failed, CSV saved]", conditionMessage(e), "\n"))
 
-cat("\n==================== 汇总 ====================\n")
+cat("\n==================== Summary ====================\n")
 print(result_all[, .(population, model = substr(model, 1, 28), n_unit, effect,
                      p = ifelse(p < 0.001, "<0.001", sprintf("%.3f", p)))])
-cat("\n交互检验：\n"); print(interaction)
+cat("\nInteraction test:\n"); print(interaction)

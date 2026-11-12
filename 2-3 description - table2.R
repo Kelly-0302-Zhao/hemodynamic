@@ -1,48 +1,48 @@
 ## =============================================================================
-## 2-3 description - — 低血压情况描述性统计（Table 2）
+## 2-3 description - descriptive statistics of hypotension (Table 2)
 ## =============================================================================
 
 suppressPackageStartupMessages({
-  library(data.table)   # 读表、处理表
-  library(geepack)      # 跑 GEE 模型
+  library(data.table)   # read and process tables
+  library(geepack)      # run GEE models
 })
 
-## 根目录。所有输入输出都挂在这个目录下面
+## Root directory. All inputs and outputs are placed under this directory
 D    <- "D:/Paper/anesthesia/propofol&ciprofol compares/My paper/multicenter/20260827"
-DATA <- file.path(D, "JCA_run")   # 清洗好的中间表（master / monitor / event / lab）的家
+DATA <- file.path(D, "JCA_run")   # Home of the cleaned intermediate tables (master / monitor / event / lab)
 CODE <- file.path(D, "投稿材料", "JCA", "投稿包_20261009", "10-11")
-OUT  <- file.path(CODE, "out")     # 所有结果文件都存到这里
+OUT  <- file.path(CODE, "out")     # All result files are saved here
 dir.create(OUT, showWarnings = FALSE, recursive = TRUE)
 setwd(CODE)
 
-## 三个 ID 列。三张表 ID 列类型不一致，合并前都要先转成文字型（否则合并会错位）
+## Three ID columns. The ID column types are inconsistent across the three tables, so convert them all to character before merging (otherwise the merge will misalign)
 ID_VARS  <- c("PATIENT_ID", "VISIT_ID", "OPER_ID")
-MY_TZ    <- "UTC"      # 原始时间戳带 Z 后缀，全程按 UTC 解析，保证内部一致
-GAP_LIMIT <- 10        # 分钟：相邻测点超过 10 分钟视为"监测中断"，不跨中断累计低血压时长
+MY_TZ    <- "UTC"      # Raw timestamps carry a Z suffix; parse everything as UTC throughout to keep the internal representation consistent
+GAP_LIMIT <- 10        # Minutes: a gap of more than 10 minutes between consecutive measurements is treated as a "monitoring gap"; hypotension duration is not accumulated across a gap
 
-## ：把 "2024-01-01T08:30:00Z" 这种 ISO 时间字符串转成 POSIXct
+## : convert ISO time strings such as "2024-01-01T08:30:00Z" to POSIXct
 parse_iso <- function(x) {
   if (inherits(x, "POSIXct")) return(x)
   as.POSIXct(gsub("T", " ", sub("Z$", "", as.character(x))),
              tz = MY_TZ, format = "%Y-%m-%d %H:%M:%S")
 }
-## 把三列 ID 统一转成文字型
+## Convert the three ID columns to character
 to_chr_ids <- function(DT) {
   DT[, (ID_VARS) := lapply(.SD, as.character), .SDcols = ID_VARS]
   DT
 }
 
-cat("[公共设置] 已就绪 | 输出目录：", OUT, "\n")
+cat("[Common setup] ready | Output directory:", OUT, "\n")
 
 
 ## ============================================================================
-## 第 1 步：读入手术表 / 事件表，并补上分组、中心、年份
+## Step 1: read the surgery table / event table and add group, center, and year
 ## ============================================================================
 
 d   <- setDT(readRDS(file.path(OUT, "Final_Analysis_Surgery.rds")))
 epi <- setDT(readRDS(file.path(OUT, "Final_Analysis_Events.rds")))
 
-## 读手术基础表（一行 = 一次手术），取分组 / 中心 / 年份用于拆分两组做描述
+## Read the surgery base table (one row = one surgery) and take group / center / year to split the two groups for the descriptive summary
 master <- fread(file.path(DATA, "master_clean_85397obs.csv"), encoding = "UTF-8")
 master <- to_chr_ids(master)
 master[, anes_start := parse_iso(ANES_START_TIME)]
@@ -54,17 +54,17 @@ for (v in c("ASA_GRADE", "operation_type", "Hospital", "SEX")) {
 }
 info <- master[, .(PATIENT_ID, VISIT_ID, OPER_ID, Group, Hospital, year)]
 
-## 把分组 / 中心 / 年份挂到手术表上，再删掉"是否长期低血压"信息缺失的手术
+## Attach group / center / year to the surgery table, then delete the surgeries with missing "prolonged hypotension" information
 d   <- info[d, on = ID_VARS]
 d   <- d[!is.na(prolonged)]
 d[, any_hypo := as.integer(n_epi >= 1L)]
 
-cat("手术表：", nrow(d), "次手术（已剔除 prolonged 缺失）\n")
-cat("事件表：", nrow(epi), "次低血压 episode\n\n")
+cat("Surgery table:", nrow(d), "procedures (prolonged missing excluded)\n")
+cat("Event table:", nrow(epi), "hypotensive episodes\n\n")
 
 
 ## ============================================================================
-## 第 2 步：算手术级描述表
+## Step 2: compute the surgery-level descriptive table
 ## ============================================================================
 
 by_surg <- d[, .(
@@ -94,13 +94,13 @@ by_surg <- d[, .(
   `Monitoring density, readings/min, median`    = sprintf("%.2f", median(rate_map))
 ), by = Group]
 
-cat("---- 表2A：手术级指标（分母 = 手术例次）----\n")
+cat("---- Table 2A: procedure-level metrics (denominator = procedures)----\n")
 print(by_surg)
-cat(sprintf("\n单位提示：手术 %d 例次 | 患者 %d 人\n\n", nrow(d), uniqueN(d$PATIENT_ID)))
+cat(sprintf("\nUnit note: %d procedures | %d patients\n\n", nrow(d), uniqueN(d$PATIENT_ID)))
 
 
 ## ============================================================================
-## 第 3 步：算事件级描述表（表 2B，分母 = 一次低血压 episode）
+## Step 3: compute the event-level descriptive table (Table 2B, denominator = one hypotension episode)
 ## ============================================================================
 
 de <- merge(epi, d[, .(PATIENT_ID, VISIT_ID, OPER_ID, Group)], by = ID_VARS)
@@ -117,18 +117,18 @@ by_epi <- de[, .(
   `Maximum depth, mm Hg, median`      = sprintf("%.1f", median(max_map_depth))
 ), by = Group]
 
-cat("---- 表2B：事件级指标（分母 = 一次低血压 episode）----\n")
+cat("---- Table 2B: episode-level metrics (denominator = one hypotensive episode)----\n")
 print(by_epi)
 
 
 ## ============================================================================
-## 第 4 步：把两张表存盘（csv + Word 各一份）
+## Step 4: save the two tables (csv + Word each)
 ## ============================================================================
 
 fwrite(by_surg, file.path(OUT, "Table2_SurgeryLevel.csv"))
 fwrite(by_epi,  file.path(OUT, "Table2_EpisodeLevel.csv"))
 
-## 存 Word 版
+## Save the Word version
 tryCatch({
   suppressPackageStartupMessages({ library(flextable); library(officer) })
   ft1 <- flextable(as.data.frame(by_surg)) |> theme_booktabs() |> autofit() |>
@@ -139,5 +139,5 @@ tryCatch({
          set_caption(caption = "Table 2B. Episode-level characteristics of intraoperative hypotension. Unit of analysis: one hypotensive episode.")
   print(read_docx() |> body_add_flextable(ft2),
         target = file.path(OUT, "Table2_EpisodeLevel.docx"))
-}, error = function(e) cat("[Word 输出失败，CSV 已保存]", conditionMessage(e), "\n"))
+}, error = function(e) cat("[Word output failed, CSV saved]", conditionMessage(e), "\n"))
 

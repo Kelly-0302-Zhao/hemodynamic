@@ -2,12 +2,12 @@ library(forestplot)
 library(grid)
 
 # ============================================================
-# M2 (总低血压负荷 AUC) 分层亚组森林图 —— 自动读 CSV 取数版
+# M2 (total hypotension burden AUC) stratified subgroup forest plot - automatic CSV-reading version
 # ============================================================
 
 OUT_DIR <- "D:/Paper/anesthesia/propofol&ciprofol compares/My paper/multicenter/20260827/投稿材料/JCA/投稿包_20261009/10-11/out"
 
-# ---------- 自动取数 ----------
+# ---------- Automatic data extraction ----------
 get_m2 <- function(tag) {
   f <- file.path(OUT_DIR, paste0("Sensitivity_Analysis_Results_", tag, ".csv"))
   if (!file.exists(f)) stop("missing: ", f)
@@ -23,7 +23,7 @@ get_m2 <- function(tag) {
   )
 }
 
-# 顺序与原脚本一致：65-75 / 75-85 / >=85 / Female / Male
+# Same order as the original script: 65-75 / 75-85 / >=85 / Female / Male
 LAYERS <- list(
   list(label = "  65-75", tag = "AGE 65-75"),
   list(label = "  75-85", tag = "AGE 75-85"),
@@ -34,7 +34,7 @@ LAYERS <- list(
 
 res <- lapply(LAYERS, function(x) c(get_m2(x$tag), list(label = x$label)))
 
-# 百分数 >=1 取 1 位；负号用 ASCII '-'（forestplot 内为纯文本）
+# Percentages >=1 take 1 decimal place; use ASCII '-' for the minus sign (plain text inside forestplot)
 fmt_pct <- function(v) sprintf("%.1f%%", v)
 fmt_eff <- function(r) {
   sprintf("%s (%s to %s)", fmt_pct(r$est), fmt_pct(r$lo), fmt_pct(r$hi))
@@ -47,7 +47,7 @@ for (r in res) {
               trimws(r$label), fmt_eff(r), fmt_p(r$p), as.integer(r$n)))
 }
 
-# ---------- 组装向量（10 行：表头2 + Age标题1 + Age 3层 + Sex标题1 + Sex 2层 + 空1）----------
+# ---------- Assemble the vector (10 rows: 2 header + 1 Age title + 3 Age strata + 1 Sex title + 2 Sex strata + 1 blank)----------
 labels <- c("Subgroup", "",
             "Age (years)",
             res[[1]]$label, res[[2]]$label, res[[3]]$label,
@@ -86,7 +86,7 @@ u <- c(NA, NA, NA,
        NA, NA,
        res[[4]]$hi, res[[5]]$hi)
 
-# ---------- 绘图----------
+# ---------- Plotting----------
 fp <- function() {
   forestplot(
     labeltext = text,

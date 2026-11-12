@@ -1,16 +1,16 @@
 ## =============================================================================
 ## 4-6 subgroup analysis - age 75-85.R
 ## -----------------------------------------------------------------------------
-## 4-6 亚组分析：只看年龄 75-84 岁的手术
+## 4-6 Subgroup analysis: procedures in patients aged 75-84 only
 ## =============================================================================
 
 
 ## ============================================================================
-## 第 1 步：准备工作
+## Step 1: preparation
 ## ============================================================================
 suppressPackageStartupMessages({
-  library(data.table)   # 读表、处理表
-  library(geepack)      # 跑 GEE 模型
+  library(data.table)   # read and process tables
+  library(geepack)      # run GEE models
 })
 
 LEVEL_EN <- c("女" = "Female", "男" = "Male",
@@ -23,10 +23,10 @@ lvl_en <- function(x) {
 }
 
 
-## 根目录、输出目录
+## root directory, output directory
 D    <- "D:/Paper/anesthesia/propofol&ciprofol compares/My paper/multicenter/20260827"
 CODE <- file.path(D, "投稿材料", "JCA", "投稿包_20261009", "10-11")
-OUT  <- file.path(CODE, "out")                 # 所有结果文件都存到这里
+OUT  <- file.path(CODE, "out")                 # All result files are saved here
 dir.create(OUT, showWarnings = FALSE, recursive = TRUE)
 setwd(CODE)
 
@@ -37,59 +37,59 @@ PS_VARS <- c("AGE", "SEX", "BMI", "ASA_GRADE", "EMERGENCY_INDICATOR",
              "operation_type", "Hypertension", "Diabetes", "Coronary_artery_disease",
              "Heart_failure")
 
-## GEE 模型里调整的 4 个基线变量
+## 4 baseline variables adjusted for in the GEE model
 ADJ_VARS <- c("Hypertension", "AGE", "SEX", "ASA_GRADE")
 
-## 本亚组标签
+## Label of this subgroup
 LABEL <- "AGE 75-85"
 
-## 读入两张表
-tab     <- setDT(readRDS(file.path(OUT, "Final_Analysis_Long_Table.rds")))  # 手术表
-epi_all <- setDT(readRDS(file.path(OUT, "Final_Analysis_Events.rds")))       # 事件表
+## Read two tables
+tab     <- setDT(readRDS(file.path(OUT, "Final_Analysis_Long_Table.rds")))  # Surgery table
+epi_all <- setDT(readRDS(file.path(OUT, "Final_Analysis_Events.rds")))       # Event table
 
-## ID 列统一转成文字型
+## Convert ID columns to character
 for (v in ID_VARS) {
   set(tab,     j = v, value = as.character(tab[[v]]))
   set(epi_all, j = v, value = as.character(epi_all[[v]]))
 }
 
-cat("已读入：手术表", nrow(tab), "例次 | 事件表", nrow(epi_all), "次事件\n")
+cat("Loaded: surgery table", nrow(tab), "procedures | event table", nrow(epi_all), "episodes\n")
 
 
 ## ============================================================================
-## 第 2 步：取出这个亚组的手术，做未加权（crude）对照，并检查例数够不够
+## Step 2: extract the procedures in this subgroup, run an unweighted (crude) comparison, and check whether the sample size is sufficient
 ## ============================================================================
 
-## 只挑年龄 75-84 岁的手术例次
+## Keep only procedures in patients aged 75-84
 x <- tab[AGE >= 75 & AGE < 85]
-cat("纳入亚组：手术", nrow(x), "例次 | 患者", uniqueN(x$PATIENT_ID), "人\n")
+cat("Subgroup included: surgery", nrow(x), "procedures |", uniqueN(x$PATIENT_ID), "patients\n")
 
 if (nrow(x) < 200 || uniqueN(x$Group) < 2) {
-  cat("  例数不足或只有一组，跳过。\n")
+  cat("  Too few procedures or only one arm; skipped.\n")
 } else {
 
-  cat(sprintf("  分组：Ciprofol %d 例次 / Propofol %d 例次\n",
+  cat(sprintf("  Group: Ciprofol %d procedures / Propofol %d procedures\n",
               sum(x$Group == "Ciprofol_only"), sum(x$Group == "Propofol_only")))
 
-  ## 未加权对照：只看两组在几个汇总指标上的原始差别（不加权，仅作对照）
+  ## Unweighted comparison: raw differences between the two groups on a few summary metrics (no weighting, for reference only)
   crude <- x[, .(n_surgery    = .N,
                  n_patient    = uniqueN(PATIENT_ID),
                  prolonged_pct = 100 * mean(prolonged, na.rm = TRUE),
                  MAP65_AUC_median = median(MAP65_AUC, na.rm = TRUE),
                  n_epi_mean   = mean(n_epi, na.rm = TRUE)),
               by = Group]
-  cat("\n  ---- 第 2 步：未加权（crude）对照 ----\n")
+  cat("\n  ---- Step 2: unweighted (crude) comparison ----\n")
   print(crude)
 
 
   ## ==========================================================================
-  ## 第 3 步：在这个亚组内【重新】拟合倾向评分、算稳定化权重
+  ## Step 3: re-fit the propensity score within this subgroup and compute the stabilized weights
   ## ==========================================================================
   xw <- copy(x)
   xw[, treat := as.integer(Group == "Ciprofol_only")]
 
-  ## 11 个倾向评分变量里，凡是本亚组内人人一样的，自动剔除（否则 glm 系数为 NA）
-  ## 本亚组里 AGE 恒定，会被自动剔除
+  ## Among the 11 propensity score variables, automatically drop any that are constant within this subgroup (otherwise the glm coefficient is NA)
+  ## AGE is constant in this subgroup and will be dropped automatically
   use <- character(0)
   for (v in PS_VARS) {
     if (!v %in% names(xw)) next
@@ -102,15 +102,15 @@ if (nrow(x) < 200 || uniqueN(x$Group) < 2) {
   }
   dropped <- setdiff(PS_VARS, use)
   if (length(dropped))
-    cat("   [PS] 本亚组内恒定、已自动剔除：", paste(dropped, collapse = ", "), "\n")
+    cat("   [PS] constant within this subgroup, dropped automatically:", paste(dropped, collapse = ", "), "\n")
 
-  ## 只在 11 个变量都填全的病人里拟合（用 ..use 取这些列，见坑提示）
+  ## Fit only among the patients with all 11 variables complete (use ..use to select these columns; see the pitfall note)
   cc  <- complete.cases(xw[, ..use])
   xp  <- xw[cc]
   if (nrow(xp) < 100 || min(table(xp$treat)) < 10)
-    stop("本亚组例数不足或某一组太少，无法拟合倾向评分")
+    stop("Too few procedures in this subgroup, or one arm is too small; propensity score cannot be fitted")
 
-  ## 逻辑回归算倾向评分，再算稳定化权重（处理组 = 发生率/PS，对照组 = (1-发生率)/(1-PS)）
+  ## Logistic regression for the propensity score, then compute the stabilized weights (treatment group = treatment rate/PS, control group = (1-treatment rate)/(1-PS))
   ps <- glm(as.formula(paste("treat ~", paste(use, collapse = " + "))),
             data = xp, family = binomial())
   xp[, ps_hat := predict(ps, type = "response")]
@@ -126,7 +126,7 @@ if (nrow(x) < 200 || uniqueN(x$Group) < 2) {
   hi_overlap <- min(max(xp$ps_hat[xp$treat == 1]), max(xp$ps_hat[xp$treat == 0]))
   xp[, in_overlap := ps_hat >= lo_overlap & ps_hat <= hi_overlap]
 
-  ## 加权前后协变量平衡（SMD = 组间均值差 / 合并标准差，<0.1 算平衡）
+  ## Covariate balance before and after weighting (SMD = between-group mean difference / pooled SD; <0.1 counts as balanced)
   wsmd <- function(v, w) {
     v <- as.numeric(v)
     m1 <- weighted.mean(v[xp$treat == 1], w[xp$treat == 1])
@@ -161,31 +161,31 @@ if (nrow(x) < 200 || uniqueN(x$Group) < 2) {
                     weight_max = max(sw),
                     ESS      = ess(sw)), by = Group][, Group := NULL]
 
-  cat(sprintf("   [PS] 参与加权手术 %d 例次（患者 %d 人）；PS 范围环泊酚 %.3f-%.3f，Propofol %.3f-%.3f\n",
+  cat(sprintf("   [PS] Procedures included in weighting %d (patients %d); PS range Ciprofol %.3f-%.3f, Propofol %.3f-%.3f\n",
               nrow(xp), uniqueN(xp$PATIENT_ID),
               min(xp$ps_hat[xp$treat == 1]), max(xp$ps_hat[xp$treat == 1]),
               min(xp$ps_hat[xp$treat == 0]), max(xp$ps_hat[xp$treat == 0])))
-  cat(sprintf("   [平衡] 加权前最大 SMD %.3f → 加权后最大 SMD %.3f\n",
+  cat(sprintf("   [Balance] Max SMD before weighting %.3f → max SMD after weighting %.3f\n",
               max(bal$smd_before, na.rm = TRUE), max(bal$smd_after, na.rm = TRUE)))
   e_c <- ess_tab[Group == "Ciprofol_only", ESS]
   e_p <- ess_tab[Group == "Propofol_only", ESS]
-  cat(sprintf("   [权重] Ciprofol ESS %.0f / %d 例次，Propofol ESS %.0f / %d 例次\n",
+  cat(sprintf("   [Weight] Ciprofol ESS %.0f / %d procedures, Propofol ESS %.0f / %d procedures\n",
               e_c, sum(xp$treat == 1), e_p, sum(xp$treat == 0)))
-  cat(sprintf("   [重叠] 两组 PS 重叠区间 = [%.3f, %.3f]；区间外 %d 例次（%.1f%%）\n",
+  cat(sprintf("   [Overlap] PS overlap region between groups = [%.3f, %.3f]; outside the region %d procedures (%.1f%%)\n",
               lo_overlap, hi_overlap, sum(!xp$in_overlap), 100 * mean(!xp$in_overlap)))
 
 
   ## ==========================================================================
-  ## 第 4 步：准备事件级数据 + 模型 M1
+  ## Step 4: prepare event-level data + model M1
   ## ==========================================================================
 
-  ## 把手术表的 分组、权重、调整变量 挂到每个事件上 → ep：一行 = 一次事件
+  ## Attach the group, weight, and adjustment variables from the surgery table to each event → ep: one row = one episode
   ep <- epi_all[xp[, .(PATIENT_ID, VISIT_ID, OPER_ID, Group,
                        Hypertension, AGE, SEX, ASA_GRADE, w = sw)],
                 on = ID_VARS, nomatch = NULL]
   ep <- ep[!is.na(Group) & is.finite(w) & w > 0]
 
-  ## GEE 要求"聚类编号"必须是整数（传文字型会卡死），这里把手术编号（患者+就诊+手术）转成整数编号
+  ## GEE requires the cluster id to be an integer (a character value hangs); convert the surgery id (patient + visit + surgery) into an integer id here
   ep[, sid_int := as.integer(factor(paste(PATIENT_ID, VISIT_ID, OPER_ID)))]
 
   adj_ok <- ADJ_VARS[vapply(ADJ_VARS, function(v) {
@@ -195,22 +195,22 @@ if (nrow(x) < 200 || uniqueN(x$Group) < 2) {
   }, logical(1))]
   ADJ <- if (length(adj_ok)) paste(adj_ok, collapse = " + ") else "1"
 
-  ## 因变量：这次事件持续超过 10 分钟记 1，否则记 0
+  ## Outcome: 1 if this episode lasted longer than 10 minutes, 0 otherwise
   ep[, long_epi := as.integer(duration > 10)]
-  keep1 <- c("long_epi", "Group", adj_ok, "sid_int")   # data.table 的 with=FALSE 只接受字符向量
+  keep1 <- c("long_epi", "Group", adj_ok, "sid_int")   # data.table's with=FALSE only accepts a character vector
   d1 <- ep[complete.cases(ep[, keep1, with = FALSE])]
 
   m1 <- geeglm(as.formula(paste("long_epi ~ Group +", ADJ)),
                data = d1, id = sid_int, weights = d1$w,
                family = binomial(), corstr = "exchangeable")
 
-  ## 取出"环泊酚 vs 丙泊酚"那个系数（对照 = 丙泊酚）
+  ## Extract the "ciprofol vs propofol" coefficient (control = propofol)
   s1   <- summary(m1)$coefficients
-  est1 <- s1["GroupCiprofol_only", "Estimate"]    # 对数尺度系数
-  se1  <- s1["GroupCiprofol_only", "Std.err"]     # 标准误
-  p1   <- 2 * pnorm(-abs(est1 / se1))            # P 值
+  est1 <- s1["GroupCiprofol_only", "Estimate"]    # log-scale coefficient
+  se1  <- s1["GroupCiprofol_only", "Std.err"]     # standard error
+  p1   <- 2 * pnorm(-abs(est1 / se1))            # P value
 
-  ## OR 和置信区间 = 系数取指数
+  ## OR and confidence interval = exponentiated coefficient
   r1 <- data.table(
     analysis   = LABEL,
     model      = "M1 Proportion of prolonged hypotensive episodes (>10 min) per episode",
@@ -225,15 +225,15 @@ if (nrow(x) < 200 || uniqueN(x$Group) < 2) {
     effect     = sprintf("%.2f (%.2f-%.2f)", exp(est1), exp(est1 - 1.96 * se1), exp(est1 + 1.96 * se1)))
   result <- r1
 
-  cat("M1 每次事件 >10 min 的比例  OR =", r1$effect, "  P =", sprintf("%.3g", p1), "\n")
-  cat("   （", nrow(d1), "次事件，涉及", uniqueN(d1$PATIENT_ID), "位病人）\n")
+  cat("M1 proportion of episodes >10 min  OR =", r1$effect, "  P =", sprintf("%.3g", p1), "\n")
+  cat("   （", nrow(d1), "episodes, involving", uniqueN(d1$PATIENT_ID), "patients)\n")
 
 
   ## ==========================================================================
-  ## 第 5 步：模型 M2 —— 每次低血压事件的严重程度总分（AUC），两组比较
+  ## Step 5: model M2 - severity score (AUC) of each hypotension episode, comparison between the two groups
   ## ==========================================================================
 
-  ep[, log_eauc := log(event_auc + 0.1)]   # +0.1 是为了避开 log(0)
+  ep[, log_eauc := log(event_auc + 0.1)]   # +0.1 avoids log(0)
   keep2 <- c("log_eauc", "Group", adj_ok, "sid_int")
   d2 <- ep[complete.cases(ep[, keep2, with = FALSE])]
 
@@ -246,7 +246,7 @@ if (nrow(x) < 200 || uniqueN(x$Group) < 2) {
   se2  <- s2["GroupCiprofol_only", "Std.err"]
   p2   <- 2 * pnorm(-abs(est2 / se2))
 
-  ## 对数系数换算成百分比变化：100 * (exp(系数) - 1)
+  ## Convert the log coefficient to a percentage change: 100 * (exp(coefficient) - 1)
   r2 <- data.table(
     analysis   = LABEL,
     model      = "M2 Per-episode hypotension burden (AUC)",
@@ -264,11 +264,11 @@ if (nrow(x) < 200 || uniqueN(x$Group) < 2) {
                          100 * (exp(est2 + 1.96 * se2) - 1)))
   result <- rbind(result, r2)
 
-  cat("M2 每次事件 AUC 变化      ", r2$effect, "  P =", sprintf("%.3g", p2), "\n")
+  cat("M2 per-episode AUC change              ", r2$effect, "  P =", sprintf("%.3g", p2), "\n")
 
 
   ## ==========================================================================
-  ## 第 6 步：模型 M3 —— 每次低血压事件持续几分钟，两组比较
+  ## Step 6: model M3 - duration of each hypotension episode in minutes, comparison between the two groups
   ## ==========================================================================
 
   ep[, log_duration := log(duration + 0.1)]
@@ -301,15 +301,15 @@ if (nrow(x) < 200 || uniqueN(x$Group) < 2) {
                          100 * (exp(est3 + 1.96 * se3) - 1)))
   result <- rbind(result, r3)
 
-  cat("M3 每次事件时长变化       ", r3$effect, "  P =", sprintf("%.3g", p3), "\n")
+  cat("M3 per-episode duration change         ", r3$effect, "  P =", sprintf("%.3g", p3), "\n")
 
 
   ## ==========================================================================
-  ## 第 7 步：模型 M4 —— 每台手术发生几次低血压事件，两组比较
+  ## Step 7: model M4 - number of hypotension episodes per procedure, comparison between the two groups
   ## ==========================================================================
 
   xp[, sid_int := as.integer(factor(paste(PATIENT_ID, VISIT_ID, OPER_ID)))]
-  xp[, lg_dur  := log(anes_duration_mins)]   # 麻醉时长取对数，做 offset
+  xp[, lg_dur  := log(anes_duration_mins)]   # Log-transform anesthesia duration and use it as an offset
 
   keep4 <- c("n_epi", "Group", adj_ok, "lg_dur", "sid_int")
   d4 <- xp[complete.cases(xp[, keep4, with = FALSE])]
@@ -337,13 +337,13 @@ if (nrow(x) < 200 || uniqueN(x$Group) < 2) {
     effect     = sprintf("%.2f (%.2f-%.2f)", exp(est4), exp(est4 - 1.96 * se4), exp(est4 + 1.96 * se4)))
   result <- rbind(result, r4)
 
-  cat("M4 事件次数率（每小时）   RR =", r4$effect, "  P =", sprintf("%.3g", p4), "\n")
-  cat("\n  ---- 亚组内 IPTW 加权后的结果 ----\n")
+  cat("M4 episode rate (per hour)         RR =", r4$effect, "  P =", sprintf("%.3g", p4), "\n")
+  cat("\n  ---- Results after IPTW weighting within the subgroup ----\n")
   print(result[, .(model, unit, effect, effect_type, p)])
 
 
   ## ==========================================================================
-  ## 第 8 步：加权后的绝对指标（两组各自的加权发生率等汇总）
+  ## Step 8: weighted absolute metrics (weighted incidence and other summaries for each group)
   ## ==========================================================================
 
   abs_tab <- xp[, .(n_surgery    = .N,
@@ -352,12 +352,12 @@ if (nrow(x) < 200 || uniqueN(x$Group) < 2) {
                     MAP65_AUC_median = median(MAP65_AUC, na.rm = TRUE),
                     n_epi_mean   = weighted.mean(n_epi, sw, na.rm = TRUE)),
                  by = Group]
-  cat("\n  ---- 加权后绝对指标 ----\n")
+  cat("\n  ---- Absolute metrics after weighting ----\n")
   print(abs_tab)
 
 
   ## ==========================================================================
-  ## 第 9 步：把结果存盘
+  ## Step 9: save the results to disk
   ## ==========================================================================
 
   fwrite(crude,   file.path(OUT, paste0("Sensitivity_Analysis_Crude_",     LABEL, ".csv")))
@@ -384,7 +384,7 @@ if (nrow(x) < 200 || uniqueN(x$Group) < 2) {
            set_caption(caption = sprintf("Table 1. Covariate balance before and after IPTW - %s.", LABEL))
     print(read_docx() |> body_add_flextable(ft2),
           target = file.path(OUT, paste0("Table1_IPTW_", LABEL, ".docx")))
-  }, error = function(e) cat("[Word 输出失败，CSV 已保存]", conditionMessage(e), "\n"))
+  }, error = function(e) cat("[Word output failed, CSV saved]", conditionMessage(e), "\n"))
 
 }
 

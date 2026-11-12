@@ -45,7 +45,7 @@ for (r in res) {
               trimws(r$label), r$est, r$lo, r$hi, fmt_p(r$p), as.integer(r$n)))
 }
 
-# M2/M3 全部为负值区间；用连字符会写成 "−33.1−−24.9" 造成歧义，故保留 to
+# M2/M3 are entirely negative ranges; a hyphen would produce "−33.1−−24.9" and be ambiguous, so "to" is retained
 fmt_eff <- function(r) sprintf("%.1f%% (%.1f%% to %.1f%%)", r$est, r$lo, r$hi)
 
 labels <- c("Subgroup", "", "Age (years)",

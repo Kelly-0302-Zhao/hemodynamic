@@ -1,7 +1,7 @@
 ## =============================================================================
 ## 4-2 subgroup analysis - operation duration.R
 ## -----------------------------------------------------------------------------
-## 按手术（麻醉）时长分层 + 交互分析
+## Stratification by procedure (anesthesia) duration + interaction analysis
 ## =============================================================================
 
 suppressPackageStartupMessages({ library(data.table); library(geepack) })
@@ -18,7 +18,7 @@ PS_VARS  <- c("AGE", "SEX", "BMI", "ASA_GRADE", "EMERGENCY_INDICATOR", "operatio
               "Hypertension", "Diabetes", "Coronary_artery_disease", "Heart_failure")
 
 ## ============================================================================
-## 复用函数：子集内重新拟合 PS + 稳定化权重 + 截断
+## Reusable function: refit PS + stabilized weights + truncation within the subset
 ## ============================================================================
 fit_iptw <- function(dt) {
   dt <- copy(dt)
@@ -45,7 +45,7 @@ fit_iptw <- function(dt) {
 epi <- setDT(readRDS(file.path(OUT, "Final_Analysis_Events.rds")))
 
 ## ============================================================================
-## 复用函数：给一批已加权的手术，跑 M1（事件级 OR）
+## Reusable function: run M1 (episode-level OR) on a set of already weighted procedures
 ## ============================================================================
 run_m1 <- function(dw_sub, tag, n_stratum = NA_integer_) {
   ep <- epi[dw_sub[, .(PATIENT_ID, VISIT_ID, OPER_ID, Group, Hypertension, AGE, SEX, ASA_GRADE, w = sw)],
@@ -73,7 +73,7 @@ run_m1 <- function(dw_sub, tag, n_stratum = NA_integer_) {
              p = round(2 * pnorm(-abs(est / se)), 4))
 }
 
-## 联合 Wald 检验：给一个 geeglm 模型和一组"交互项"系数名，返回 W、df、p
+## Joint Wald test: given a geeglm model and a set of "interaction" coefficient names, return W, df, p
 wald_joint <- function(fit, terms) {
   V <- vcov(fit); b <- coef(fit)
   terms <- intersect(terms, names(b))
@@ -84,15 +84,15 @@ wald_joint <- function(fit, terms) {
 }
 
 ## ============================================================================
-## 读表、造时长分组
+## Read the table and build duration groups
 ## ============================================================================
 d <- setDT(readRDS(file.path(OUT, "Final_Analysis_Long_Table.rds")))
 for (v in ID_VARS) set(d, j = v, value = as.character(d[[v]]))
 d <- d[!is.na(prolonged) & is.finite(anes_duration_mins) & anes_duration_mins > 0]
 
-## 三分位切点
+## Tertile cut points
 q1 <- unname(quantile(d$anes_duration_mins, 1/3)); q2 <- unname(quantile(d$anes_duration_mins, 2/3))
-cat(sprintf("\n麻醉时长三分位切点：T1 <%s | T2 %s-%s | T3 >%s 分钟（中位 %s）\n",
+cat(sprintf("\nAnaesthesia duration tertile cut-points: T1 <%s | T2 %s-%s | T3 >%s minutes (median %s)\n",
             round(q1), round(q1), round(q2), round(q2), round(median(d$anes_duration_mins))))
 d[, dur_q := fcase(anes_duration_mins <= q1, "T1_short",
                    anes_duration_mins <= q2, "T2_mid",
@@ -100,7 +100,7 @@ d[, dur_q := fcase(anes_duration_mins <= q1, "T1_short",
 d[, dur_q := factor(dur_q, levels = c("T1_short", "T2_mid", "T3_long"))]
 
 ## ============================================================================
-## 第 1 部分：分层估计（每档内部重新拟合权重）
+## Part 1: stratified estimates (weights refit within each stratum)
 ## ============================================================================
 strata_rows <- list()
 for (lv in levels(d$dur_q)) {
@@ -108,19 +108,19 @@ for (lv in levels(d$dur_q)) {
   r <- run_m1(sub, lv, n_stratum = nrow(d[dur_q == lv]))
   if (!is.null(r)) strata_rows[[length(strata_rows) + 1]] <- r
 }
-## 整体也放一行作参照
+## Also add an overall row as a reference
 strata_rows[[length(strata_rows) + 1]] <- run_m1(fit_iptw(d), "Overall", nrow(d))
 strata_tab <- rbindlist(strata_rows)
-cat("\n=== 按时长三分位分层（M1 OR，层内重新加权）===\n")
+cat("\n=== Stratification by duration tertile (M1 OR, re-weighted within stratum) ===\n")
 print(strata_tab)
 fwrite(strata_tab, file.path(OUT, "Subgroup_Duration_Strata.csv"))
 
 ## ============================================================================
-## 第 2 部分：交互检验（全队列、全队列权重）
-##   2a. 分类时长档 × 分组 的交互项，联合 Wald 检验
-##   2b. 连续 log 时长 × 分组 的交互（1 个自由度）
+## Part 2: interaction test (whole cohort, whole-cohort weights)
+##   2a. Interaction term between categorical duration stratum and Group, joint Wald test
+##   2b. Interaction between continuous log duration and Group (1 degree of freedom)
 ## ============================================================================
-dwf <- fit_iptw(d)                       # 全队列权重（交互模型用）
+dwf <- fit_iptw(d)                       # Whole-cohort weights (for the interaction models)
 epf <- epi[dwf[, .(PATIENT_ID, VISIT_ID, OPER_ID, Group, Hypertension, AGE, SEX, ASA_GRADE,
                    dur_q, anes_duration_mins, w = sw)], on = ID_VARS, nomatch = NULL]
 epf <- epf[!is.na(Group) & is.finite(w) & w > 0]
@@ -133,14 +133,14 @@ adjf <- ADJ_VARS[vapply(ADJ_VARS, function(v) {
 }, logical(1))]
 epf <- epf[complete.cases(epf[, c("long_epi", "Group", adjf, "dur_q", "w"), with = FALSE])]
 
-## 2a 分类交互
+## 2a Categorical interaction
 m_int <- geeglm(as.formula(paste("long_epi ~ Group * dur_q +", paste(adjf, collapse = " + "))),
                 data = epf, id = epf$sid_int, weights = epf$w,
                 family = binomial(), corstr = "exchangeable")
 inter_terms <- grep(":", names(coef(m_int)), value = TRUE)
 w_int <- wald_joint(m_int, inter_terms)
 
-## 2b 连续交互（log 时长 × 分组；anes_duration_mins 已在上面 join 进 epf）
+## 2b Continuous interaction (log duration x Group; anes_duration_mins has already been joined into epf)
 epf[, lg_dur := log(anes_duration_mins)]
 epf <- epf[is.finite(lg_dur)]
 m_cont <- geeglm(as.formula(paste("long_epi ~ Group * lg_dur +", paste(adjf, collapse = " + "))),
@@ -156,12 +156,12 @@ inter_tab <- rbind(
   data.table(test = "分组 × log(时长)（连续交互）", terms = paste(grep(":", names(coef(m_cont)), value = TRUE), collapse = "; "),
              Wald_W = round(w_cont$W, 3), df = w_cont$df, p = signif(w_cont$p, 3),
              verdict = fifelse(w_cont$p < 0.05, "交互显著", "交互不显著：药效不随时长单调变化")))
-cat("\n=== 交互检验（全队列）===\n")
+cat("\n=== Interaction test (full cohort) ===\n")
 print(inter_tab)
 fwrite(inter_tab, file.path(OUT, "Subgroup_Duration_Interaction.csv"))
 
 ## ============================================================================
-## 第 3 部分：换一版临床切点做敏感性（<120 / 120-240 / ≥240 分钟）
+## Part 3: sensitivity analysis with a different set of clinical cut points (<120 / 120-240 / >=240 minutes)
 ## ============================================================================
 d[, dur_clin := fcase(anes_duration_mins < 120, "A_<120",
                       anes_duration_mins < 240, "B_120-240",
@@ -174,6 +174,6 @@ for (lv in levels(d$dur_clin)) {
   if (!is.null(r)) clin_rows[[length(clin_rows) + 1]] <- r
 }
 clin_tab <- rbindlist(clin_rows)
-cat("\n=== 临床切点敏感性（<120 / 120-240 / ≥240 分钟）===\n")
+cat("\n=== Clinical cut-point sensitivity (<120 / 120-240 / >=240 minutes) ===\n")
 print(clin_tab)
 fwrite(clin_tab, file.path(OUT, "Subgroup_Duration_Strata_ClinicalCut.csv"))

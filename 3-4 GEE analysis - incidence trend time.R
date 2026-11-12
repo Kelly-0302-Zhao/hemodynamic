@@ -1,38 +1,38 @@
 ## =============================================================================
-## 3-4 GEE analysis -— 低血压发生率的时间趋势
+## 3-4 GEE analysis - temporal trend of hypotension incidence
 ## =============================================================================
 ## ============================================================================
-## 第 1 步：准备工作
+## Step 1: preparation
 ## ============================================================================
 suppressPackageStartupMessages({
-  library(data.table)   # 读表、处理表
-  library(geepack)      # 跑 GEE
+  library(data.table)   # read and process tables
+  library(geepack)      # Run GEE
 })
-# 设定路径
+# Set up paths
 D    <- "D:/Paper/anesthesia/propofol&ciprofol compares/My paper/multicenter/20260827"
-OUT  <- file.path(D, "投稿材料", "JCA", "投稿包_20261009", "10-11", "out")  # 所有结果文件都存到这里
+OUT  <- file.path(D, "投稿材料", "JCA", "投稿包_20261009", "10-11", "out")  # All result files are saved here
 dir.create(OUT, showWarnings = FALSE, recursive = TRUE)
 setwd(file.path(D, "投稿材料", "JCA", "投稿包_20261009", "10-11"))
 
-## 三个 ID 列。合并前都要先转成文字型，类型不一致会合并错位
+## Three ID columns. All must be converted to character before merging, otherwise inconsistent types misalign the join
 ID_VARS <- c("PATIENT_ID", "VISIT_ID", "OPER_ID")
 
-## 时间戳统一按 UTC 解析
+## Parse all timestamps as UTC
 MY_TZ <- "UTC"
 
 
 ## ============================================================================
-## 第 2 步：读入手术级分析表，报告环泊酚最早使用日期
-##   预期结果：屏幕上打印环泊酚最早上线的日期
+## Step 2: read the procedure-level analysis table and report the earliest date of ciprofol use
+##   Expected output: the date when ciprofol first became available is printed to the screen
 ## ============================================================================
 d <- setDT(readRDS(file.path(OUT, "Final_Analysis_Long_Table.rds")))
-d <- d[!is.na(prolonged)]   # 只保留结局齐全的手术
+d <- d[!is.na(prolonged)]   # Keep only procedures with complete outcome data
 
-cat("环泊酚最早使用日期：", as.character(min(d[Group == "Ciprofol_only", as.Date(anes_start)])), "\n\n")
+cat("Earliest Ciprofol use date:", as.character(min(d[Group == "Ciprofol_only", as.Date(anes_start)])), "\n\n")
 
 
 ## ============================================================================
-## 第 3 步：逐年 × 分组发生率表（分母 = 当年手术例次），存盘
+## Step 3: annual x group incidence table (denominator = procedures in that year), save to disk
 ## ============================================================================
 trend <- d[, .(
   n_procedures   = .N,
@@ -44,30 +44,30 @@ trend <- d[, .(
   Episodes_per_procedure= round(mean(n_epi), 2)
 ), by = .(year, Group)][order(year, Group)]
 
-cat("---- 逐年 × 分组（分母 = 当年手术例次）----\n")
+cat("---- Year × group (denominator = procedures in that year)----\n")
 print(trend)
 fwrite(trend, file.path(OUT, "Table4_IncidenceTrend.csv"))
 
-## 只保留两药同时存在的年份，避免"单臂年份"造成假趋势
+## Keep only years in which both drugs were used, to avoid spurious trends from "single-arm years"
 both_years <- trend[, .N, by = year][N == 2, year]
-cat("\n两药同时存在的年份：", paste(both_years, collapse = ", "), "\n")
+cat("\nYears with both drugs present:", paste(both_years, collapse = ", "), "\n")
 fwrite(trend[year %in% both_years], file.path(OUT, "Table4_IncidenceTrend_BothArms.csv"))
 
 
 ## ============================================================================
-## 第 4 步：年份 × 分组交互检验（GEE，事件级，按手术聚类）
+## Step 4: year x group interaction test (GEE, episode level, clustered by procedure)
 ## ============================================================================
-## 把事件表挂上所属手术的年份、分组、协变量、中心
+## Attach the year, group, covariates and center of the parent procedure to the episode table
 epi4 <- setDT(readRDS(file.path(OUT, "Final_Analysis_Events.rds")))
 dd <- epi4[d[year %in% both_years, .(PATIENT_ID, VISIT_ID, OPER_ID, Group, year,
                                      Hypertension, AGE, SEX, ASA_GRADE, Hospital)],
            on = ID_VARS, nomatch = 0]
 dd <- dd[!is.na(Group)]
-dd[, long_epi := as.integer(duration > 10)]   # 这次事件是否持续超过 10 分钟
+dd[, long_epi := as.integer(duration > 10)]   # Whether this episode lasted longer than 10 minutes
 dd <- dd[!is.na(long_epi)]
 
-## geeglm 的 id 必须整数，把手术编号（患者+就诊+手术）转成整数编号；
-## year_c = 年份减去最早年份（让交互项系数更好解释）
+## geeglm requires an integer id; convert the procedure identifier (patient + visit + surgery) into an integer index;
+## year_c = year minus the earliest year (makes the interaction coefficient easier to interpret)
 dd[, sid_int := as.integer(factor(paste(PATIENT_ID, VISIT_ID, OPER_ID)))]
 dd[, year_c  := as.numeric(year) - min(as.numeric(year))]
 
@@ -78,34 +78,34 @@ print(round(s, 4))
 
 ix <- grep(":", rownames(s), value = TRUE)
 if (length(ix)) {
-  cat(sprintf("\n交互项 %s：OR=%.2f (%.2f-%.2f)，p=%s\n", ix[1],
+  cat(sprintf("\nInteraction term %s: OR=%.2f (%.2f-%.2f), p=%s\n", ix[1],
               exp(s[ix[1], "Estimate"]),
               exp(s[ix[1], "Estimate"] - 1.96 * s[ix[1], "Std.err"]),
               exp(s[ix[1], "Estimate"] + 1.96 * s[ix[1], "Std.err"]),
               ifelse(s[ix[1], ncol(s)] < 0.001, "<0.001",
                      sprintf("%.3f", s[ix[1], ncol(s)]))))
-  cat("解释：交互项不显著，说明「两组随时间的相对差异」没有统计学证据，\n")
-  cat("      即观察到的组间差异不能归因于「环泊酚越用越好」。\n")
+  cat("Interpretation: the interaction term is not significant, so there is no statistical evidence of a \"relative difference between the two groups over time\",\n")
+  cat("      i.e. the observed between-group difference cannot be attributed to \"the more Ciprofol is used, the better\".\n")
 }
 
 ## ============================================================================
-## 第 5 步：首次 IOH 的"时间分布条形图"
+## Step 5: bar chart of the timing distribution of first IOH
 ## ============================================================================
 suppressPackageStartupMessages({ library(ggplot2); library(scales) })
 
-bin_dur      <- 5    # 每 5 分钟一个时间窗
-max_obs_time <- 60   # 只看诱导后 60 分钟
+bin_dur      <- 5    # One time bin every 5 minutes
+max_obs_time <- 60   # Look only at the 60 minutes after induction
 
-## first_low_t 在"从未发生 IOH"的手术里是 Inf/NA；剔除结局不可定义的那 1 台，与主分析人群一致
+## first_low_t is Inf/NA in procedures with no IOH episode; drop the 1 procedure with an undefined outcome, consistent with the main analysis population
 s5 <- setDT(readRDS(file.path(OUT, "Final_Analysis_Long_Table.rds")))
 s5 <- s5[!is.na(n_epi)]
 s5[, rel_min := as.numeric(difftime(first_low_t, anes_start, units = "mins"))]
 
 group_totals <- s5[, .(total_n = .N), by = Group]
-cat("\n---- 第 5 步：首次 IOH 时间分布（分母 = 各组全部手术例次）----\n")
+cat("\n---- Step 5: distribution of time to first IOH (denominator = all procedures in each group)----\n")
 print(group_totals)
 
-## 先把"箱 × 组"的完整网格列出来
+## First build the complete grid of "bin x group"
 bins <- seq(0, max_obs_time - bin_dur, by = bin_dur)
 grid <- data.table::CJ(time_bin = bins, Group = c("Ciprofol_only", "Propofol_only"))
 ev <- s5[!is.na(rel_min) & rel_min >= 0 & rel_min < max_obs_time,
@@ -118,10 +118,10 @@ tr5[, incidence_pct := 100 * events / total_n]
 tr5[, time_label := paste0(time_bin, "-", time_bin + bin_dur)]
 data.table::setorder(tr5, time_bin, Group)
 
-## 宽表：每箱两组的比例与差值，直接看"有没有早期优势"
+## Wide table: proportions and difference between the two groups in each bin, to see directly whether there is an early advantage
 wide <- data.table::dcast(tr5, time_bin + time_label ~ Group, value.var = "incidence_pct")
 wide[, diff_ciprofol_minus_propofol := Ciprofol_only - Propofol_only]
-cat("\n每 5 分钟箱的首次 IOH 发生比例（%）与组间差（环泊酚 − 丙泊酚，负值 = 环泊酚更低）：\n")
+cat("\nProportion of first IOH occurrences per 5-minute bin (%) and between-group difference (Ciprofol − Propofol; negative = lower with Ciprofol):\n")
 wide_show <- copy(wide)
 num_cols  <- setdiff(names(wide_show), c("time_bin", "time_label"))
 wide_show[, (num_cols) := lapply(.SD, function(x) round(x, 3)), .SDcols = num_cols]
@@ -129,7 +129,7 @@ print(wide_show)
 fwrite(tr5,  file.path(OUT, "Table_TimeToFirst_IOH.csv"))
 fwrite(wide, file.path(OUT, "Table_TimeToFirst_IOH_wide.csv"))
 
-## 作图：并列条形图（配色沿用原脚本：环泊酚 #E18476 / 丙泊酚 #00B2B2）
+## Plot: side-by-side bar chart (colors follow the original script: ciprofol #E18476 / propofol #00B2B2)
 tr5[, Group := factor(Group, levels = c("Ciprofol_only", "Propofol_only"))]
 p_bar <- ggplot(tr5, aes(x = factor(time_bin), y = incidence_pct, fill = Group)) +
   geom_col(position = position_dodge(width = 0.8), width = 0.7) +

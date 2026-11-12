@@ -45,8 +45,8 @@ for (r in res) {
               trimws(r$label), r$est, r$lo, r$hi, fmt_p(r$p), as.integer(r$n)))
 }
 
-# 统一用 "to" 分隔 CI 区间：负值区间若用连字符会写成 "−33.1−−24.9" 造成歧义，
-# 全部指标（OR/RR/%）一律用 to，正文表格亦同，全篇一致。
+# Use "to" to separate CI intervals throughout: for negative intervals a hyphen would be written as "−33.1−−24.9" and be ambiguous,
+# All metrics (OR/RR/%) use 'to', including in the main text tables, for consistency throughout the paper.
 fmt_eff <- function(r) sprintf("%.2f (%.2f to %.2f)", r$est, r$lo, r$hi)
 
 labels <- c("Subgroup", "", "Age (years)",

@@ -12,17 +12,17 @@ setwd(file.path(D, "投稿材料", "JCA", "投稿包_20261009", "10-11"))
 
 ID_VARS <- c("PATIENT_ID", "VISIT_ID", "OPER_ID")
 
-## 中介模型和结局模型共用的基线混杂变量（不含术后/暴露后变量，除中介本身）
+## Baseline confounders shared by the mediator model and the outcome model (excluding postoperative/post-exposure variables other than the mediator itself)
 CONF <- c("AGE", "SEX", "BMI", "ASA_GRADE", "Hypertension", "Diabetes",
           "Coronary_artery_disease", "Heart_failure", "EMERGENCY_INDICATOR",
           "operation_type", "anes_duration_mins")
-## 倾向评分用的 11 个基线变量
+## 11 baseline variables used for the propensity score
 PS_VARS <- c("AGE", "SEX", "BMI", "ASA_GRADE", "EMERGENCY_INDICATOR", "operation_type",
              "Hypertension", "Diabetes", "Coronary_artery_disease", "Heart_failure",
              "anes_duration_mins")
 
 ## =============================================================================
-## 在给定数据里重新拟合倾向评分 + 稳定化权重 + 1%/99% 截断
+## Re-fit the propensity score on the given data + stabilized weights + 1%/99% truncation
 ## =============================================================================
 fit_iptw <- function(dt) {
   dt <- copy(dt)
@@ -48,16 +48,16 @@ fit_iptw <- function(dt) {
 }
 
 ## =============================================================================
-## g-formula 中介分析（VanderWeele 的 g-computation）
-##   中介模型（暴露→中介）：线性，log1p 后标准化
-##   结局模型（含中介）：加权 logistic
-##   四个反事实均值（风险差尺度）：
-##     TE  = ψ(1,m1) − ψ(0,m0)   总效应
-##     NIE = ψ(1,m1) − ψ(1,m0)   自然间接效应（经由中介）
-##     NDE = ψ(1,m0) − ψ(0,m0)   自然直接效应（不经中介）
-##     IIE = ψ(1,m1) − ψ(0,m1)   交互诱导效应
-##   95%CI：参数化 bootstrap —— 从两个模型的系数协方差矩阵各抽一组系数，
-##   重算一遍反事实均值，重复 B 次，取 2.5%/97.5% 分位。
+## g-formula mediation analysis (VanderWeele's g-computation)
+##   Mediation model (exposure -> mediator): linear, standardized after log1p
+##   Outcome model (with mediator): weighted logistic
+##   Four counterfactual means (risk difference scale):
+##     TE  = ψ(1,m1) − ψ(0,m0)   total effect
+##     NIE = ψ(1,m1) − ψ(1,m0)   natural indirect effect (via the mediator)
+##     NDE = ψ(1,m0) − ψ(0,m0)   natural direct effect (not via the mediator)
+##     IIE = ψ(1,m1) − ψ(0,m1)   interaction-induced effect
+##   95%CI: parametric bootstrap - draw one set of coefficients from the coefficient covariance matrix of each of the two models,
+##   Recompute the counterfactual means, repeat B times, and take the 2.5%/97.5% percentiles.
 ## =============================================================================
 mvrnorm1 <- function(mu, V) {
   V <- (V + t(V)) / 2
@@ -86,14 +86,14 @@ gf_mediation <- function(dat, fe_col = NULL, B = 2000, seed = 20261106, label = 
   mm <- lm(f_med, data = dt, weights = dt$sw)
   mo <- glm(f_out, data = dt, family = binomial(), weights = dt$sw)
 
-  ## ---- 中介模型：拆出 X_med（去掉 treat 列），反事实时把 treat 换成 a ----
+  ## ---- Mediator model: split out X_med (drop the treat column); replace treat with a for the counterfactual ----
   df_med <- model.matrix(f_med, data = dt); cn_med <- colnames(df_med)
   i_tm <- which(cn_med == "treat")
   X_med <- df_med[, -i_tm, drop = FALSE]
   b_med <- coef(mm)
   a_treat <- unname(b_med[i_tm]); b_med_rest <- b_med[-i_tm]
 
-  ## ---- 结局模型：X_out 去掉 treat / m_z；其余列与 b_rest 对齐 ----
+  ## ---- Outcome model: X_out drops treat / m_z; the remaining columns are aligned with b_rest ----
   df_out <- model.matrix(f_out, data = dt); cn_out <- colnames(df_out)
   i_treat_out <- which(cn_out == "treat")
   i_mz_out    <- which(cn_out == "m_z")
@@ -106,7 +106,7 @@ gf_mediation <- function(dat, fe_col = NULL, B = 2000, seed = 20261106, label = 
 
   lo <- min(dt$m_z); hi <- max(dt$m_z)
 
-  ## ---- 四个反事实均值 ----
+  ## ---- Four counterfactual means ----
   psi_set <- function(bmr, at, br, bt, bm) {
     m1 <- pmin(pmax(as.numeric(X_med %*% bmr) + at, lo), hi)
     m0 <- pmin(pmax(as.numeric(X_med %*% bmr) + 0,  lo), hi)
@@ -120,7 +120,7 @@ gf_mediation <- function(dat, fe_col = NULL, B = 2000, seed = 20261106, label = 
 
   pt <- psi_set(b_med_rest, a_treat, b_rest, b_treat, b_mz)
 
-  ## ---- 参数化 bootstrap ----
+  ## ---- Parametric bootstrap ----
   set.seed(seed)
   bm_n <- names(b_med); bo_n <- names(b_out)
   med_rest_names <- setdiff(bm_n, "treat")
@@ -176,17 +176,17 @@ gf_mediation <- function(dat, fe_col = NULL, B = 2000, seed = 20261106, label = 
 }
 
 ## =============================================================================
-## 主流程
+## Main workflow
 ## =============================================================================
 cat("====================================================================\n")
-cat("4-4 失血量中介分析（g-formula，风险差尺度，参数化 bootstrap 2000 次）\n")
+cat("4-4 Blood-loss mediation analysis (g-formula, risk-difference scale, 2000 parametric bootstrap replicates)\n")
 cat("====================================================================\n")
 
 dw <- setDT(readRDS(file.path(OUT, "Final_Analysis_Long_Table.rds")))
 for (v in ID_VARS) set(dw, j = v, value = as.character(dw[[v]]))
 dw <- dw[!is.na(prolonged)]
 
-## 失血量（手术级）
+## Blood loss (procedure level)
 periop <- fread(file.path(OUT, "_Perioperative_Vars.csv"))
 for (v in ID_VARS) set(periop, j = v, value = as.character(periop[[v]]))
 periop <- unique(periop, by = ID_VARS)
@@ -198,15 +198,15 @@ dw[, op_year := as.numeric(as.character(year))]
 dw[, cell := paste(Hospital, op_year, sep = "_")]
 
 bl_sub <- dw[!is.na(bloodloss_ml) & !is.na(prolonged)]
-cat(sprintf("\n全队列 %d 台；失血量有记录 %d 台(%.1f%%)\n",
+cat(sprintf("\nFull cohort: %d procedures; blood loss recorded in %d procedures (%.1f%%)\n",
             nrow(dw), nrow(bl_sub), 100 * nrow(bl_sub) / nrow(dw)))
-cat(sprintf("失血量子集 %d 台（环泊酚 %d / 丙泊酚 %d），覆盖 %d 个中心×年格子\n",
+cat(sprintf("Blood-loss subset: %d procedures (ciprofol %d / propofol %d), covering %d centre x year cells\n",
             nrow(bl_sub), sum(bl_sub$Group == "Ciprofol_only"),
             sum(bl_sub$Group == "Propofol_only"), uniqueN(bl_sub$cell)))
-cat("环泊酚在该子集内出现的中心×年：",
+cat("Centre x year cells where ciprofol appears in this subset:",
     paste(sort(unique(bl_sub[Group == "Ciprofol_only"]$cell)), collapse = ", "), "\n")
 
-## ---- 两臂共存格子：各≥20 台的中心×年格子 ----
+## ---- Cells with both arms present: center × year cells with >=20 procedures each ----
 cc_bl <- bl_sub[, .N, by = .(cell, Group)]
 piv_bl <- dcast(cc_bl, cell ~ Group, value.var = "N", fill.value = 0)
 for (cn in c("Ciprofol_only", "Propofol_only"))
@@ -217,51 +217,51 @@ piv_bl[is.na(Ciprofol_only), Ciprofol_only := 0L]
 piv_bl[is.na(Propofol_only),  Propofol_only  := 0L]
 piv_bl[, within := pmin(Ciprofol_only, Propofol_only)]
 both_bl <- piv_bl[within >= 20]$cell
-cat(sprintf("\n两臂共存且各≥20台的中心×年格子：%s\n", paste(both_bl, collapse = ", ")))
-cat(sprintf("★ 信息量：环泊酚 %d 台；能与同格丙泊酚配对的仅 %d 对\n",
+cat(sprintf("\nCentre x year cells with both arms present and >=20 procedures each: %s\n", paste(both_bl, collapse = ", ")))
+cat(sprintf("* Information content: %d ciprofol procedures; only %d can be paired with propofol in the same cell\n",
             sum(piv_bl$Ciprofol_only), sum(piv_bl[Ciprofol_only >= 1, within])))
 
-## ---- 口径① 粗口径（主分析） ----
+## ---- Specification 1: crude specification (main analysis) ----
 bl <- fit_iptw(bl_sub)
 res1 <- gf_mediation(bl, fe_col = NULL, B = 2000, label = "① 粗口径")
-cat("\n---- ① 粗口径 ----\n")
+cat("\n---- (1) crude specification ----\n")
 print(res1[, .(spec, n_surgery, n_cipro, n_prop,
                a_exposure_to_mediator, b_mediator_to_outcome,
                TE_RD, TE_lo, TE_hi, NIE_RD, NIE_lo, NIE_hi,
                NDE_RD, NDE_lo, NDE_hi,
                prop_mediated, prop_lo, prop_hi, or_total_model, verdict)])
 
-## ---- 口径② ① + 中心×年固定效应 ----
+## ---- Specification 2: specification 1 + center × year fixed effect ----
 res2 <- gf_mediation(bl, fe_col = "cell", B = 2000, label = "② ①+中心×年FE")
-cat("\n---- ② ①+ 中心×年固定效应 ----\n")
+cat("\n---- (2) (1) + centre x year fixed effects ----\n")
 print(res2[, .(spec, n_surgery, n_cipro, n_prop,
                a_exposure_to_mediator, b_mediator_to_outcome,
                TE_RD, TE_lo, TE_hi, NIE_RD, NIE_lo, NIE_hi,
                NDE_RD, NDE_lo, NDE_hi,
                prop_mediated, prop_lo, prop_hi, or_total_model, verdict)])
 
-## ---- 口径③ 两臂共存格子 ----
+## ---- Specification 3: cells with both arms present ----
 bl_co <- fit_iptw(bl_sub[cell %in% both_bl])
 res3 <- gf_mediation(bl_co, fe_col = NULL, B = 2000, label = "③ 两臂共存格子")
-cat("\n---- ③ 两臂共存格子 ----\n")
+cat("\n---- (3) cells where both arms coexist ----\n")
 print(res3[, .(spec, n_surgery, n_cipro, n_prop,
                a_exposure_to_mediator, b_mediator_to_outcome,
                TE_RD, TE_lo, TE_hi, NIE_RD, NIE_lo, NIE_hi,
                NDE_RD, NDE_lo, NDE_hi,
                prop_mediated, prop_lo, prop_hi, or_total_model, verdict)])
 
-## ---- 口径④ ③ + 中心×年固定效应 ----
+## ---- Specification 4: specification 3 + center × year fixed effect ----
 res4 <- gf_mediation(bl_co, fe_col = "cell", B = 2000, label = "④ ③+中心×年FE")
-cat("\n---- ④ ③+ 中心×年固定效应 ----\n")
+cat("\n---- (4) (3) + centre x year fixed effects ----\n")
 print(res4[, .(spec, n_surgery, n_cipro, n_prop,
                a_exposure_to_mediator, b_mediator_to_outcome,
                TE_RD, TE_lo, TE_hi, NIE_RD, NIE_lo, NIE_hi,
                NDE_RD, NDE_lo, NDE_hi,
                prop_mediated, prop_lo, prop_hi, or_total_model, verdict)])
 
-## ---- 辅助诊断----
-cat("\n---- 辅助诊断①：暴露×中介交互检验 ----\n")
-cat("   交互不显著 ⇒ 无交互假设成立，g-formula 的反事实分解无偏。\n")
+## ---- Auxiliary diagnostics----
+cat("\n---- Auxiliary diagnostic 1: exposure x mediator interaction test ----\n")
+cat("   No significant interaction => the no-interaction assumption holds and the g-formula counterfactual decomposition is unbiased.\n")
 for (nm in c("粗口径", "①+中心×年FE")) {
   fc <- if (nm == "粗口径") NULL else "cell"
   dat <- copy(bl)
@@ -280,45 +280,45 @@ for (nm in c("粗口径", "①+中心×年FE")) {
               unname(summary(mo_i)$coefficients["treat:m_z", 4])))
 }
 
-cat("\n---- 辅助诊断②：a 路径（暴露→失血量）粗 vs 加中心×年固定效应 ----\n")
+cat("\n---- Auxiliary diagnostic 2: a path (exposure -> blood loss), crude vs with centre x year fixed effects ----\n")
 bl_a <- copy(bl_sub)
 bl_a[, treat := as.integer(Group == "Ciprofol_only")]
 bl_a[, m_z := as.numeric(scale(log1p(bloodloss_ml)))]
 m_crude <- lm(m_z ~ treat, data = bl_a)
 m_fe    <- lm(m_z ~ treat + factor(cell), data = bl_a)
 a_crude <- unname(coef(m_crude)["treat"]); a_fe <- unname(coef(m_fe)["treat"])
-cat(sprintf("   粗 a = %.4f (SE %.4f, p=%.3g)\n", a_crude,
+cat(sprintf("   Crude a = %.4f (SE %.4f, p=%.3g)\n", a_crude,
             summary(m_crude)$coefficients["treat", 2], summary(m_crude)$coefficients["treat", 4]))
-cat(sprintf("   加FE a = %.4f (SE %.4f, p=%.3g)  ← 衰减 %.0f%%\n", a_fe,
+cat(sprintf("   With FE a = %.4f (SE %.4f, p=%.3g)  ← attenuation %.0f%%\n", a_fe,
             summary(m_fe)$coefficients["treat", 2], summary(m_fe)$coefficients["treat", 4],
             100 * (1 - a_fe / a_crude)))
-cat("   ⇒ a 路径衰减 ≠ 中介不存在：g-formula 的 NIE 四个口径方向一致、CI 均不跨 0。\n")
+cat("   => Attenuation of the a path != absence of mediation: across all four specifications the g-formula NIE has a consistent direction and no CI crosses 0.\n")
 
-cat("\n---- 辅助诊断③：总效应在中心×年分层后趋零 ⇒ 中介比例不可解释 ----\n")
+cat("\n---- Auxiliary diagnostic 3: total effect tends to zero after stratification by centre x year => the mediated proportion is uninterpretable ----\n")
 bl_t <- copy(bl_sub)
 bl_t[, treat := as.integer(Group == "Ciprofol_only")]
 bl_t <- fit_iptw(bl_t)
 t_crude <- glm(prolonged ~ treat, data = bl_t, family = binomial(), weights = bl_t$sw)
 t_fe    <- glm(prolonged ~ treat + factor(cell), data = bl_t, family = binomial(), weights = bl_t$sw)
-cat(sprintf("   无固定效应 总效应 OR = %.3f (%.3f~%.3f)\n", exp(coef(t_crude)["treat"]),
+cat(sprintf("   No fixed effects  total effect OR = %.3f (%.3f~%.3f)\n", exp(coef(t_crude)["treat"]),
             exp(confint(t_crude)["treat", 1]), exp(confint(t_crude)["treat", 2])))
-cat(sprintf("   加中心×年FE 总效应 OR = %.3f (%.3f~%.3f)\n", exp(coef(t_fe)["treat"]),
+cat(sprintf("   With centre x year FE  total effect OR = %.3f (%.3f~%.3f)\n", exp(coef(t_fe)["treat"]),
             exp(confint(t_fe)["treat", 1]), exp(confint(t_fe)["treat", 2])))
-cat("   ⇒ 中介比例 = 间接效应/总效应，是比值：分母趋零时必然发散，是数学性质，\n")
-cat("     不代表中介不存在 ⇒ 报告 NIE/NDE/TE 绝对值。\n")
+cat("   => Mediated proportion = indirect effect / total effect, a ratio: it necessarily diverges when the denominator approaches zero - a mathematical property,\n")
+cat("     this does not mean mediation is absent => report the absolute NIE/NDE/TE values.\n")
 
-## ---- 交付表 ----
+## ---- Delivery table ----
 med_tab <- rbindlist(list(res1, res2, res3, res4), fill = TRUE)
 write_atomic <- function(tab, fname) {
   tmp <- file.path(OUT, paste0("_stag_", fname))
   fwrite(tab, tmp)
   dst <- file.path(OUT, fname)
   ok <- suppressWarnings(file.copy(tmp, dst, overwrite = TRUE))
-  if (ok) { unlink(tmp); cat("\n已写出：", dst, "\n") }
+  if (ok) { unlink(tmp); cat("\nWritten to:", dst, "\n") }
   else {
-    cat("\n!! 目标文件被占用（可能正被 Excel/WPS 打开），未能覆盖：", dst, "\n")
-    cat("!! 结果已保存在暂存文件：", tmp, "\n")
+    cat("\n!! Target file is locked (may be open in Excel/WPS) and could not be overwritten:", dst, "\n")
+    cat("!! Results saved to a temporary file:", tmp, "\n")
   }
 }
 write_atomic(med_tab, "Mediation_bloodloss.csv")
-cat(sprintf("\n表行数：%d（四个口径）\n", nrow(med_tab)))
+cat(sprintf("\nTable rows: %d (four specifications)\n", nrow(med_tab)))

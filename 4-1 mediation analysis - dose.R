@@ -1,7 +1,7 @@
 ## =============================================================================
 ## 4-1 mediation analysis - dose.R
 ## -----------------------------------------------------------------------------
-## 诱导剂量的中介分析（g-formula / g-computation，风险差尺度，参数化 bootstrap 2000 次）
+## Mediation analysis of the induction dose (g-formula / g-computation, risk difference scale, parametric bootstrap 2000 times)
 ## =============================================================================
 
 suppressPackageStartupMessages({ library(data.table) })
@@ -13,17 +13,17 @@ setwd(file.path(D, "投稿材料", "JCA", "投稿包_20261009", "10-11"))
 
 ID_VARS <- c("PATIENT_ID", "VISIT_ID", "OPER_ID")
 
-## 中介模型和结局模型共用的基线混杂变量（不含术后/暴露后变量，除中介本身）
+## Baseline confounders shared by the mediator model and the outcome model (excluding postoperative/post-exposure variables other than the mediator itself)
 CONF <- c("AGE", "SEX", "BMI", "ASA_GRADE", "Hypertension", "Diabetes",
           "Coronary_artery_disease", "Heart_failure", "EMERGENCY_INDICATOR",
           "operation_type", "anes_duration_mins")
-## 倾向评分用的 11 个基线变量
+## 11 baseline variables used for the propensity score
 PS_VARS <- c("AGE", "SEX", "BMI", "ASA_GRADE", "EMERGENCY_INDICATOR", "operation_type",
              "Hypertension", "Diabetes", "Coronary_artery_disease", "Heart_failure",
              "anes_duration_mins")
 
 ## =============================================================================
-## 在给定数据里重新拟合倾向评分 + 稳定化权重 + 1%/99% 截断
+## Re-fit the propensity score on the given data + stabilized weights + 1%/99% truncation
 ## =============================================================================
 fit_iptw <- function(dt) {
   dt <- copy(dt)
@@ -49,17 +49,17 @@ fit_iptw <- function(dt) {
 }
 
 ## =============================================================================
-## g-formula 中介分析（VanderWeele 的 g-computation）
-##   med_col 指定中介变量的列名（先 log1p 再标准化）
-##   中介模型（暴露→中介）：线性加权
-##   结局模型（含中介）：加权 logistic
-##   四个反事实均值（风险差尺度）：
-##     TE  = ψ(1,m1) − ψ(0,m0)   总效应
-##     NIE = ψ(1,m1) − ψ(1,m0)   自然间接效应（经由中介）
-##     NDE = ψ(1,m0) − ψ(0,m0)   自然直接效应（不经中介）
-##     IIE = ψ(1,m1) − ψ(0,m1)   交互诱导效应
-##   95%CI：参数化 bootstrap —— 从两个模型的系数协方差矩阵各抽一组系数，
-##   重算一遍反事实均值，重复 B 次，取 2.5%/97.5% 分位。
+## g-formula mediation analysis (VanderWeele's g-computation)
+##   med_col specifies the column name of the mediator (log1p first, then standardize)
+##   Mediator model (exposure -> mediator): linear weighting
+##   Outcome model (with mediator): weighted logistic
+##   Four counterfactual means (risk difference scale):
+##     TE  = ψ(1,m1) − ψ(0,m0)   total effect
+##     NIE = ψ(1,m1) − ψ(1,m0)   natural indirect effect (via the mediator)
+##     NDE = ψ(1,m0) − ψ(0,m0)   natural direct effect (not via the mediator)
+##     IIE = ψ(1,m1) − ψ(0,m1)   interaction-induced effect
+##   95%CI: parametric bootstrap - draw one set of coefficients from the coefficient covariance matrix of each of the two models,
+##   Recompute the counterfactual means, repeat B times, and take the 2.5%/97.5% percentiles.
 ## =============================================================================
 mvrnorm1 <- function(mu, V) {
   V <- (V + t(V)) / 2
@@ -89,14 +89,14 @@ gf_mediation <- function(dat, med_col, fe_col = NULL, B = 2000,
   mm <- lm(f_med, data = dt, weights = dt$sw)
   mo <- glm(f_out, data = dt, family = binomial(), weights = dt$sw)
 
-  ## ---- 中介模型：拆出 X_med（去掉 treat 列），反事实时把 treat 换成 a ----
+  ## ---- Mediator model: split out X_med (drop the treat column); replace treat with a for the counterfactual ----
   df_med <- model.matrix(f_med, data = dt); cn_med <- colnames(df_med)
   i_tm <- which(cn_med == "treat")
   X_med <- df_med[, -i_tm, drop = FALSE]
   b_med <- coef(mm)
   a_treat <- unname(b_med[i_tm]); b_med_rest <- b_med[-i_tm]
 
-  ## ---- 结局模型：X_out 去掉 treat / m_z；其余列与 b_rest 对齐 ----
+  ## ---- Outcome model: X_out drops treat / m_z; the remaining columns are aligned with b_rest ----
   df_out <- model.matrix(f_out, data = dt); cn_out <- colnames(df_out)
   i_treat_out <- which(cn_out == "treat")
   i_mz_out    <- which(cn_out == "m_z")
@@ -109,7 +109,7 @@ gf_mediation <- function(dat, med_col, fe_col = NULL, B = 2000,
 
   lo <- min(dt$m_z); hi <- max(dt$m_z)
 
-  ## ---- 四个反事实均值 ----
+  ## ---- Four counterfactual means ----
   psi_set <- function(bmr, at, br, bt, bm) {
     m1 <- pmin(pmax(as.numeric(X_med %*% bmr) + at, lo), hi)
     m0 <- pmin(pmax(as.numeric(X_med %*% bmr) + 0,  lo), hi)
@@ -123,7 +123,7 @@ gf_mediation <- function(dat, med_col, fe_col = NULL, B = 2000,
 
   pt <- psi_set(b_med_rest, a_treat, b_rest, b_treat, b_mz)
 
-  ## ---- 参数化 bootstrap ----
+  ## ---- Parametric bootstrap ----
   set.seed(seed)
   bm_n <- names(b_med); bo_n <- names(b_out)
   med_rest_names <- setdiff(bm_n, "treat")
@@ -180,33 +180,33 @@ gf_mediation <- function(dat, med_col, fe_col = NULL, B = 2000,
 }
 
 ## =============================================================================
-## 主流程
+## Main workflow
 ## =============================================================================
 cat("====================================================================\n")
-cat("4-1 诱导剂量的中介分析（丙泊酚当量 ind_equiv）\n")
-cat("（g-formula，风险差尺度，参数化 bootstrap 2000 次）\n")
+cat("4-1 Mediation analysis of the induction dose (propofol equivalent ind_equiv)\n")
+cat("(g-formula, risk difference scale, parametric bootstrap with 2000 replications)\n")
 cat("====================================================================\n")
 
 dw <- setDT(readRDS(file.path(OUT, "Final_Analysis_Long_Table.rds")))
 for (v in ID_VARS) set(dw, j = v, value = as.character(dw[[v]]))
 dw <- dw[!is.na(prolonged)]
 
-## ---- 剂量（手术级，口径 v12）----
-## 剂量表按 (手术, 药) 组织 ⇒ 先按「该手术所属组对应的那种药」取到，再 LEFT JOIN 回去
+## ---- dose (procedure level, specification v12)----
+## The dose table is organized by (surgery, drug) => first pick "the drug corresponding to the group that this surgery belongs to", then LEFT JOIN it back
 dose_file <- "_dose_metrics_v12.csv"
 dose_path <- file.path(OUT, dose_file)
 if (!file.exists(dose_path)) {
   cand <- list.files(OUT, pattern = "^_dose_metrics_v[0-9]+\\.csv$")
-  if (!length(cand)) stop("未找到剂量表 _dose_metrics_v*.csv")
+  if (!length(cand)) stop("Dose table _dose_metrics_v*.csv not found")
   dose_file <- cand[order(as.integer(sub("^_dose_metrics_v([0-9]+)\\.csv$", "\\1", cand)), decreasing = TRUE)][1]
   dose_path <- file.path(OUT, dose_file)
-  cat(sprintf("!! %s 不存在，回退使用 %s\n", "_dose_metrics_v12.csv", dose_file))
+  cat(sprintf("!! %s does not exist, falling back to %s\n", "_dose_metrics_v12.csv", dose_file))
 }
-cat(sprintf("剂量表：%s\n", dose_file))
+cat(sprintf("Dose table: %s\n", dose_file))
 dose <- fread(dose_path)
-if (nrow(dose) < 80000) stop(sprintf("剂量表行数异常(%d)，疑似选错文件", nrow(dose)))
+if (nrow(dose) < 80000) stop(sprintf("Unexpected number of rows in the dose table (%d); the wrong file may have been selected", nrow(dose)))
 for (v in ID_VARS) set(dose, j = v, value = as.character(dose[[v]]))
-cat(sprintf("剂量表 %d 行；drug 分布：", nrow(dose)))
+cat(sprintf("Dose table %d rows; drug distribution:", nrow(dose)))
 print(dose[, .N, by = drug])
 
 dw[, want_drug := fifelse(Group == "Ciprofol_only", "ciprofol", "propofol")]
@@ -218,18 +218,18 @@ dw <- merge(dw, dose_pick[, c(..ID_VARS, "ind_mgkg", "inf_mgkg_h", "ind_mgkg_adm
             by = ID_VARS, all.x = TRUE, sort = FALSE)
 dw <- unique(dw, by = ID_VARS)
 
-## ---- 效价比 → 丙泊酚当量---
+## ---- potency ratio -> propofol equivalent---
 RATIO <- median(dw[Group == "Propofol_only" & !is.na(ind_mgkg), ind_mgkg]) /
          median(dw[Group == "Ciprofol_only"  & !is.na(ind_mgkg), ind_mgkg])
 dw[, ind_equiv := ind_mgkg * fifelse(Group == "Ciprofol_only", RATIO, 1)]
-cat(sprintf("\n效价比（诱导剂量 mg/kg 中位数比，丙泊酚:环泊酚）= %.4f（文献 4.1:1）\n", RATIO))
-cat("诱导剂量组间分布（原始数值 vs 丙泊酚当量）：\n")
+cat(sprintf("\nPotency ratio (median ratio of induction dose mg/kg, Propofol:Ciprofol) = %.4f (literature 4.1:1)\n", RATIO))
+cat("Between-group distribution of the induction dose (raw value vs propofol equivalent):\n")
 print(rbind(
-  dw[!is.na(ind_mgkg), .(口径 = "原始数值 mg/kg", 台数 = .N,
+  dw[!is.na(ind_mgkg), .(口径 = "raw value mg/kg", 台数 = .N,
                          中位 = round(median(ind_mgkg), 3),
                          q25 = round(quantile(ind_mgkg, .25), 3),
                          q75 = round(quantile(ind_mgkg, .75), 3)), by = Group],
-  dw[!is.na(ind_equiv), .(口径 = "丙泊酚当量 mg/kg", 台数 = .N,
+  dw[!is.na(ind_equiv), .(口径 = "propofol equivalent mg/kg", 台数 = .N,
                           中位 = round(median(ind_equiv), 3),
                           q25 = round(quantile(ind_equiv, .25), 3),
                           q75 = round(quantile(ind_equiv, .75), 3)), by = Group]))
@@ -237,8 +237,8 @@ print(rbind(
 dw[, op_year := as.numeric(as.character(year))]
 dw[, cell := paste(Hospital, op_year, sep = "_")]
 
-cat(sprintf("\n全队列 %d 台\n", nrow(dw)))
-cat(sprintf("  诱导剂量有记录 %d 台(%.1f%%)  环 %d(%.1f%%) / 丙 %d(%.1f%%)\n",
+cat(sprintf("\nFull cohort: %d procedures\n", nrow(dw)))
+cat(sprintf("  Induction dose recorded in %d procedures (%.1f%%)  Ciprofol %d (%.1f%%) / Propofol %d (%.1f%%)\n",
             sum(!is.na(dw$ind_mgkg)), 100 * mean(!is.na(dw$ind_mgkg)),
             sum(!is.na(dw$ind_mgkg) & dw$Group == "Ciprofol_only"),
             100 * mean(!is.na(dw$ind_mgkg) & dw$Group == "Ciprofol_only"),
@@ -246,17 +246,17 @@ cat(sprintf("  诱导剂量有记录 %d 台(%.1f%%)  环 %d(%.1f%%) / 丙 %d(%.1
             100 * mean(!is.na(dw$ind_mgkg) & dw$Group == "Propofol_only")))
 
 ## =============================================================================
-## 主分析：诱导剂量（丙泊酚当量）中介
+## Main analysis: induction dose (propofol equivalent) mediation
 ## =============================================================================
-cat("\n\n############ 诱导剂量（丙泊酚当量）中介 ############\n")
+cat("\n\n############ Induction dose (propofol-equivalent) mediation ############\n")
 dose_sub <- dw[!is.na(ind_equiv) & !is.na(prolonged)]
-cat(sprintf("剂量子集 %d 台（环泊酚 %d / 丙泊酚 %d），覆盖 %d 个中心×年格子\n",
+cat(sprintf("Dose subset: %d procedures (ciprofol %d / propofol %d), covering %d centre x year cells\n",
             nrow(dose_sub), sum(dose_sub$Group == "Ciprofol_only"),
             sum(dose_sub$Group == "Propofol_only"), uniqueN(dose_sub$cell)))
-cat("环泊酚在该子集内的中心×年：",
+cat("Centre x year cells where ciprofol appears in this subset:",
     paste(sort(unique(dose_sub[Group == "Ciprofol_only"]$cell)), collapse = ", "), "\n")
 
-## ---- 两臂共存：各≥20 台的中心×年格子 ----
+## ---- Cells with both arms present: center × year cells with >=20 procedures each ----
 find_both_cells <- function(sub) {
   cc <- sub[, .N, by = .(cell, Group)]
   piv <- dcast(cc, cell ~ Group, value.var = "N", fill.value = 0)
@@ -271,7 +271,7 @@ find_both_cells <- function(sub) {
 }
 
 both_dose <- find_both_cells(dose_sub)
-cat(sprintf("\n两臂共存且各≥20台的中心×年格子（剂量）：%s\n", paste(both_dose, collapse = ", ")))
+cat(sprintf("\nCentre x year cells with both arms present and >=20 procedures each (dose): %s\n", paste(both_dose, collapse = ", ")))
 
 ds    <- fit_iptw(dose_sub)
 ds_co <- fit_iptw(dose_sub[cell %in% both_dose])
@@ -286,7 +286,7 @@ res_ds <- rbindlist(list(
   gf_mediation(ds_co, med_col = "ind_equiv", fe_col = "cell", B = 2000, seed = 20261113,
                label = "④ ③+中心×年FE", mediator_name = "诱导剂量(丙泊酚当量)")
 ), fill = TRUE)
-cat("\n---- 诱导剂量 · 四口径 ----\n")
+cat("\n---- Induction dose - four specifications ----\n")
 print(res_ds[, .(mediator, spec, n_surgery, n_cipro, n_prop,
                  a_exposure_to_mediator, b_mediator_to_outcome,
                  TE_RD, TE_lo, TE_hi, NIE_RD, NIE_lo, NIE_hi,
@@ -294,9 +294,9 @@ print(res_ds[, .(mediator, spec, n_surgery, n_cipro, n_prop,
                  prop_mediated, prop_lo, prop_hi, or_total_model, verdict)])
 
 ## =============================================================================
-## 辅助诊断
+## Auxiliary diagnostics
 ## =============================================================================
-cat("\n---- 辅助诊断①：暴露×中介交互检验（无交互假设是否成立）----\n")
+cat("\n---- Auxiliary diagnostic 1: exposure x mediator interaction test (is the no-interaction assumption valid) ----\n")
 for (spec_lab in c("粗口径", "①+中心×年FE")) {
   dat <- copy(ds)
   fc <- if (spec_lab == "粗口径") NULL else "cell"
@@ -315,41 +315,41 @@ for (spec_lab in c("粗口径", "①+中心×年FE")) {
               unname(summary(mo_i)$coefficients["treat:m_z", 4])))
 }
 
-cat("\n---- 辅助诊断②：a 路径（暴露→当量剂量）衰减 ----\n")
+cat("\n---- Auxiliary diagnostic 2: attenuation of the a path (exposure -> equivalent dose) ----\n")
 da <- copy(dose_sub)
 da[, treat := as.integer(Group == "Ciprofol_only")]
 da[, m_z := as.numeric(scale(log1p(ind_equiv)))]
 d_crude <- lm(m_z ~ treat, data = da)
 d_fe    <- lm(m_z ~ treat + factor(cell), data = da)
 a_crude <- unname(coef(d_crude)["treat"]); a_fe <- unname(coef(d_fe)["treat"])
-cat(sprintf("   粗 a = %.4f (SE %.4f, p=%.3g)\n", a_crude,
+cat(sprintf("   Crude a = %.4f (SE %.4f, p=%.3g)\n", a_crude,
             summary(d_crude)$coefficients["treat", 2], summary(d_crude)$coefficients["treat", 4]))
-cat(sprintf("   加FE a = %.4f (SE %.4f, p=%.3g)  ← 衰减 %.0f%%\n", a_fe,
+cat(sprintf("   With FE a = %.4f (SE %.4f, p=%.3g)  ← attenuation %.0f%%\n", a_fe,
             summary(d_fe)$coefficients["treat", 2], summary(d_fe)$coefficients["treat", 4],
             100 * (1 - a_fe / a_crude)))
-cat("   ⇒ 换算成丙泊酚当量后两臂剂量分布几乎重合 ⇒ a 路径本就极小，\n")
-cat("     剂量中介识别的是【同等当量剂量下的残余药理学差异】，而非剂量量的差异。\n")
+cat("   => After conversion to propofol-equivalent units the two dose distributions almost overlap => the a path is inherently tiny,\n")
+cat("     Dose mediation identifies the residual pharmacological difference AT AN EQUIVALENT DOSE, not a difference in dose quantity.\n")
 
-cat("\n---- 辅助诊断③：原始数值 mg/kg 口径的尺度假象（对照）----\n")
+cat("\n---- Auxiliary diagnostic 3: scale artefact of the raw mg/kg specification (control) ----\n")
 d_raw <- fit_iptw(dw[!is.na(ind_mgkg) & !is.na(prolonged)])
 rr <- gf_mediation(d_raw, med_col = "ind_mgkg", fe_col = NULL, B = 2000, seed = 20261114,
                    label = "对照", mediator_name = "诱导剂量(原始数值mg/kg·尺度假象)")
 print(rr[, .(mediator, spec, a_exposure_to_mediator, b_mediator_to_outcome,
              TE_RD, NIE_RD, NIE_lo, NIE_hi, prop_mediated, prop_lo, prop_hi)])
-cat("   ⚠ 该行的 a 路径 −1.6 量级 = 把「药物身份」当成了一条剂量通道，是尺度假象，\n")
-cat("     不可作为跨药结论引用；报告口径只有丙泊酚当量。\n")
+cat("   WARNING: an a path of magnitude -1.6 in that row means drug identity was treated as a dose channel - a scale artefact,\n")
+cat("     it must not be cited as a cross-drug conclusion; the only reportable specification is the propofol-equivalent one.\n")
 
-## ----交付表（4 行 = 四个口径）----
+## ---- Delivery table (4 rows = four specifications)----
 write_atomic <- function(tab, fname) {
   tmp <- file.path(OUT, paste0("_stag_", fname))
   fwrite(tab, tmp)
   dst <- file.path(OUT, fname)
   ok <- suppressWarnings(file.copy(tmp, dst, overwrite = TRUE))
-  if (ok) { unlink(tmp); cat("\n已写出：", dst, "\n") }
+  if (ok) { unlink(tmp); cat("\nWritten to:", dst, "\n") }
   else {
-    cat("\n!! 目标文件被占用（可能正被 Excel/WPS 打开），未能覆盖：", dst, "\n")
-    cat("!! 结果已保存在暂存文件：", tmp, "\n")
+    cat("\n!! Target file is locked (may be open in Excel/WPS) and could not be overwritten:", dst, "\n")
+    cat("!! Results saved to a temporary file:", tmp, "\n")
   }
 }
 write_atomic(res_ds, "Mediation_dose.csv")
-cat(sprintf("\n表行数：%d（1 个中介 × 4 个口径）\n", nrow(res_ds)))
+cat(sprintf("\nTable rows: %d (1 mediator x 4 specifications)\n", nrow(res_ds)))
